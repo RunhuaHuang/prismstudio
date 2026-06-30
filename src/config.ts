@@ -37,6 +37,11 @@ export interface ModalityConfig {
   protocol?: MediaProtocol
   /** 可选：音频子任务（仅 audio 模态） */
   audioTask?: 'tts' | 'music' | 'clone'
+  /**
+   * 各渠道（presetId）单独记忆的 API Key。切换 preset 时 WebUI 据此保存/恢复，
+   * 让用户在不同厂商间切换无需重填 key。key 为 presetId，value 为该渠道的 apiKey。
+   */
+  apiKeyByPreset?: Record<string, string>
 }
 
 export interface DuoConfig {

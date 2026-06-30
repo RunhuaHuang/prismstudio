@@ -98,12 +98,21 @@ function maskApiKey(key: string): string {
   return key.slice(0, 4) + '****' + key.slice(-4)
 }
 
-/** 配置脱敏后返回给前端（避免把完整 key 明文回传给浏览器） */
+/** 配置脱敏后返回给前端（避免把完整 key 明文回传给浏览器）。
+ *  顶层 apiKey 与 apiKeyByPreset map 内的 key 都脱敏。 */
 function sanitizeConfig(config: DuoConfig): DuoConfig {
   const out: DuoConfig = { ...config }
   for (const m of ['image', 'video', 'audio'] as const) {
     const mod = config[m]
-    if (mod) out[m] = { ...mod, apiKey: maskApiKey(mod.apiKey) }
+    if (mod) {
+      const masked: ModalityConfig = { ...mod, apiKey: maskApiKey(mod.apiKey) }
+      if (mod.apiKeyByPreset) {
+        masked.apiKeyByPreset = Object.fromEntries(
+          Object.entries(mod.apiKeyByPreset).map(([pid, k]) => [pid, maskApiKey(k)]),
+        )
+      }
+      out[m] = masked
+    }
   }
   return out
 }
@@ -188,18 +197,29 @@ async function handleApi(
 
 /**
  * 合并配置：前端回传的 apiKey 若含 ****（脱敏标记），保留原 config 中的真实值。
- * 避免用户在 WebUI 改一个模态时，把另一个模态的 key 误清空。
+ * 空字符串视为用户主动清空，允许清空（修复「无法删除已存 key」）。
+ * apiKeyByPreset map 同理：含 **** 的条目保留原值，否则用前端回传值（含清空）。
  */
 function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: DuoConfig): DuoConfig {
   const merged: DuoConfig = { ...incoming }
   for (const m of ['image', 'video', 'audio'] as const) {
     const inc = incoming[m]
     const cur = current[m]
-    if (inc && cur) {
-      if (!inc.apiKey || inc.apiKey.includes('****')) {
-        merged[m] = { ...inc, apiKey: cur.apiKey }
-      }
+    if (!inc || !cur) continue
+    const fixed: ModalityConfig = { ...inc }
+    // 顶层 apiKey：脱敏占位保留原值；否则用前端值（含空字符串=清空）
+    if (inc.apiKey?.includes('****')) {
+      fixed.apiKey = cur.apiKey
     }
+    // apiKeyByPreset：以原值为基底，前端非脱敏值覆盖（含清空）
+    if (cur.apiKeyByPreset || inc.apiKeyByPreset) {
+      const mergedByPreset: Record<string, string> = { ...(cur.apiKeyByPreset || {}) }
+      for (const [pid, k] of Object.entries(inc.apiKeyByPreset || {})) {
+        if (!k.includes('****')) mergedByPreset[pid] = k
+      }
+      fixed.apiKeyByPreset = mergedByPreset
+    }
+    merged[m] = fixed
   }
   return merged
 }

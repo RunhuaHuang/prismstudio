@@ -948,6 +948,8 @@ function duoApp() {
     },
     onTaskSelect(e) { this.test.task = e.detail.value; },
     config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
+    // 各模态切换前的 presetId（内存态，不存 config.json，供 onPresetChange 判断新旧）
+    _lastPreset: { image:'', video:'', audio:'' },
     presets: { image: [], video: [], audio: [] },
     status: {},
     saving: false, saveMsg: '', saveErr: false,
@@ -997,6 +999,17 @@ function duoApp() {
       const r = await fetch('/api/config'); this.config = await r.json();
       for (const k of ['image','video','audio']) {
         if (!this.config[k]) this.config[k] = {enabled:false, presetId:'', apiKey:''};
+        // 确保 byPreset map 存在
+        if (!this.config[k].apiKeyByPreset) this.config[k].apiKeyByPreset = {};
+        // 记录初始 preset 到内存（不存 config.json，避免污染配置文件）
+        this._lastPreset[k] = this.config[k].presetId;
+        // 注意：GET 返回的顶层 apiKey 与 byPreset 都是脱敏占位（含 ****）。
+        // 仅当 byPreset 里有真实（非脱敏）值时，用它覆盖顶层；否则保留脱敏占位（用户重填时再存）。
+        const pid = this.config[k].presetId;
+        const remembered = this.config[k].apiKeyByPreset[pid];
+        if (pid && remembered && !remembered.includes('****') && this.config[k].apiKey.includes('****')) {
+          this.config[k].apiKey = remembered;
+        }
       }
     },
     async loadPresets() {
@@ -1007,6 +1020,14 @@ function duoApp() {
     },
     async saveConfig() {
       this.saving = true; this.saveMsg = ''; this.saveErr = false;
+      // 保存前：把每个模态当前顶层 apiKey 同步进 apiKeyByPreset（避免未切换就改的 key 丢失）
+      for (const k of ['image','video','audio']) {
+        const mod = this.config[k];
+        if (mod && mod.presetId && mod.apiKey && !mod.apiKey.includes('****')) {
+          if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
+          mod.apiKeyByPreset[mod.presetId] = mod.apiKey;
+        }
+      }
       try {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
         const data = await r.json();
@@ -1017,10 +1038,26 @@ function duoApp() {
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
     },
     onPresetChange(key) {
-      const presetId = this.config[key].presetId;
-      if (presetId === 'custom') return;
-      const p = (this.presets[key] || []).find(x => x.id === presetId);
-      if (p) { this.config[key].model = p.model; this.config[key].protocol = p.protocol; }
+      const mod = this.config[key];
+      if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
+      // 注意：onPresetChange 在 config[key].presetId 已被 dropdown 更新为新值后触发，
+      // 故靠 _lastPreset[key] 记录切换前的 presetId 来保存旧 key。
+      const newPresetId = mod.presetId;
+      const oldPresetId = this._lastPreset[key];
+      // 保存旧 preset 的 key（仅当非脱敏占位时，避免把 **** 存进 map）
+      if (oldPresetId && oldPresetId !== newPresetId && mod.apiKey && !mod.apiKey.includes('****')) {
+        mod.apiKeyByPreset[oldPresetId] = mod.apiKey;
+      }
+      // 恢复新 preset 的 key（若有记忆且非脱敏则用记忆值，否则清空）
+      if (newPresetId !== oldPresetId) {
+        const remembered = mod.apiKeyByPreset[newPresetId];
+        mod.apiKey = (remembered && !remembered.includes('****')) ? remembered : '';
+      }
+      this._lastPreset[key] = newPresetId;
+      // 应用预设的 model/protocol（custom 不动）
+      if (newPresetId === 'custom') return;
+      const p = (this.presets[key] || []).find(x => x.id === newPresetId);
+      if (p) { mod.model = p.model; mod.protocol = p.protocol; }
     },
     presetHelp(key) {
       const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);
