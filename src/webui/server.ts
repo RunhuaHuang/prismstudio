@@ -160,9 +160,12 @@ async function handleApi(
   // GET /api/status
   if (method === 'GET' && url === '/api/status') {
     const config = loadConfig()
+    // 实际落盘目录 = 根目录（config.outputDir 或默认 configDir）+ generated-media 子目录，
+    // 与 runGeneration 的 resolve(ctx.outputDir, 'generated-media') 保持一致。
+    const root = config.outputDir || getDefaultOutputDir()
     sendJson(res, 200, {
       configPath: getConfigPath(),
-      outputDir: config.outputDir || getDefaultOutputDir(),
+      outputDir: root + (root.endsWith('generated-media') ? '' : '/generated-media'),
       modalities: {
         image: isModalityReady(config, 'image'),
         video: isModalityReady(config, 'video'),
@@ -392,10 +395,8 @@ export function startWebuiServer(port: number): Promise<void> {
         const url = (req.url || '/').split('?')[0]
         const fullUrl = req.url || '/'
 
-        // CORS（本地无害，方便调试）
-        res.setHeader('Access-Control-Allow-Origin', '*')
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+        // WebUI 与 API 同源（均由本 server 托管于 127.0.0.1），不需要 CORS。
+        // 不设 Access-Control-Allow-Origin=*，避免本机其它恶意网页跨域访问 /api/test（会用真实 key）。
         if (method === 'OPTIONS') {
           res.writeHead(204)
           res.end()

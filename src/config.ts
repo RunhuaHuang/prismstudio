@@ -15,7 +15,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { MediaModality, MediaProtocol } from './engine/media-generation-engine.js'
+import {
+  resolveMediaConfig,
+  resolveEffectiveMediaCredentials,
+  MEDIA_MODEL_PRESETS,
+  type MediaModality,
+  type MediaProtocol,
+} from './engine/media-generation-engine.js'
 
 // ===== 配置结构 =====
 
@@ -74,9 +80,14 @@ export function getConfigDir(): string {
   return dirname(getConfigPath())
 }
 
-/** 生成物默认输出根目录（outputDir 未配置时回退到配置目录下的 generated-media） */
+/**
+ * 生成物默认输出「根目录」（outputDir 未配置时的回退值）。
+ * 注意：返回的是配置目录本身，不含 generated-media 子目录——子目录由
+ * runGeneration 的 resolve(ctx.outputDir, 'generated-media') 统一拼接，
+ * 避免出现 generated-media/generated-media 双层目录。
+ */
 export function getDefaultOutputDir(): string {
-  return join(getConfigDir(), 'generated-media')
+  return getConfigDir()
 }
 
 // ===== 读写 =====
@@ -114,15 +125,24 @@ export function saveConfig(config: DuoConfig): void {
 
 /**
  * 把结构化的 ModalityConfig 转成引擎 resolveMediaConfig 所需的扁平 credentials。
- * 引擎会根据 presetId / model 自动从 MEDIA_MODEL_PRESETS 反查 protocol/baseUrl 等，
- * 因此 preset 模式下只需提供 presetId + apiKey 即可。
+ *
+ * 注意：引擎 resolveMediaConfig 要求 credentials.model 非空（否则直接返回 null）。
+ * preset 模式下用户通常不单独填 model（依赖 preset 自带），故这里对 preset 模式
+ * 从 MEDIA_MODEL_PRESETS 反查 model 填进 credentials，让引擎能正确解析。
+ * custom 模式则要求 mod.model 已填（isModalityReady 会校验）。
  */
 export function toEngineCredentials(mod: ModalityConfig): Record<string, string> {
   const creds: Record<string, string> = {
     presetId: mod.presetId,
     apiKey: mod.apiKey,
   }
-  if (mod.model?.trim()) creds.model = mod.model.trim()
+  if (mod.model?.trim()) {
+    creds.model = mod.model.trim()
+  } else if (mod.presetId && mod.presetId !== 'custom') {
+    // preset 模式且未覆盖 model：从预设反查，满足引擎对 model 非空的要求
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === mod.presetId)
+    if (preset) creds.model = preset.model
+  }
   if (mod.baseUrl?.trim()) creds.baseUrl = mod.baseUrl.trim()
   if (mod.protocol) creds.protocol = mod.protocol
   if (mod.audioTask) creds.audioTask = mod.audioTask
@@ -135,18 +155,18 @@ export function getModalityConfig(config: DuoConfig, modality: MediaModality): M
 }
 
 /**
- * 判断某模态是否"已配置好可用"：enabled + 有 apiKey + 解析后能得到 model。
- * 复用引擎的解析逻辑，避免规则不一致。
- *
- * 注意：presetId 必须是已选定的预设 ID 或 'custom'；空字符串 / 'none'（WebUI 初始态）
- * 表示用户还没选模型，不算就绪。
+ * 判断某模态是否"已配置好可用"——与运行时真实判定（resolveModality）一致。
+ * 复用引擎的 resolveMediaConfig 做严格校验，确保"显示就绪"="真能跑"，
+ * 消除 presetId 命不中 / custom 缺 baseUrl 时"显示就绪但调用必抛"的偏差。
  */
 export function isModalityReady(config: DuoConfig, modality: MediaModality): boolean {
   const mod = getModalityConfig(config, modality)
   if (!mod?.enabled || !mod.apiKey?.trim()) return false
   const presetId = mod.presetId?.trim()
-  // 未选择模型（初始态）：presetId 为空 / 'none' / 'custom' 但没填 model
+  // 未选择模型（初始态）：presetId 为空 / 'none'
   if (!presetId || presetId === 'none') return false
-  if (presetId === 'custom' && !mod.model?.trim()) return false
-  return true
+  // 严格校验：复用引擎解析，能解析出 baseUrl 才算就绪
+  const credentials = resolveEffectiveMediaCredentials(toEngineCredentials(mod), modality)
+  const resolved = resolveMediaConfig(credentials, modality)
+  return !!resolved && resolved.baseUrl.trim().length > 0
 }

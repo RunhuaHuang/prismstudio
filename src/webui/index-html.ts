@@ -1067,7 +1067,9 @@ function duoApp() {
     async runTest() {
       this.testing = true; this.testResult = null; this.testError = '';
       try {
-        const body = { modality: this.test.modality, prompt: this.test.prompt, apiKey: this.test.tempKey || undefined, size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined };
+        // 试用台用当前下拉选中的 presetId（含未保存的改动），让"改下拉→直接试"生效
+        const m = this.test.modality;
+        const body = { modality: m, prompt: this.test.prompt, apiKey: this.test.tempKey || undefined, presetId: this.config[m]?.presetId || undefined, size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined };
         const r = await fetch('/api/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || this.t.generationFailed);

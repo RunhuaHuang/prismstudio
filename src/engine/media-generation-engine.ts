@@ -643,6 +643,8 @@ export function clearMediaGenerationSessionHistory(sessionId: string): void {
       lastGeneratedByModalitySession.delete(key)
     }
   }
+  // 同时清理 Gemini 多轮历史（统一入口，避免调用方需要分别清理）
+  geminiSessionHistory.delete(sessionId)
 }
 
 // ===== 通用工具 =====
@@ -1459,8 +1461,9 @@ async function callGeminiImageApi(
     inlineData: { mimeType: r.mediaType, data: r.base64 },
   }))
 
-  // 宽高比：优先 Gemini 专属 aspectRatio，回退到通用 size（如 '16:9'）
-  const aspectRatio = input.aspectRatio?.trim() || input.size?.trim() || undefined
+  // 宽高比：只用 Gemini 专属 aspectRatio 字段。
+  // 不回退到通用 size（"1024x1024" 风格），否则会触发 Gemini API 400（aspectRatio 仅接受比例枚举）。
+  const aspectRatio = input.aspectRatio?.trim() || undefined
 
   const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, input.imageSize)
   const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`
@@ -1504,7 +1507,14 @@ async function callGeminiImageApi(
   // 更新多轮历史（保留原始 parts 含 thoughtSignature）
   const userContent: GeminiContent = { role: 'user', parts: [...referenceImageParts, { text: input.prompt }] }
   const modelContent: GeminiContent = { role: 'model', parts }
-  geminiSessionHistory.set(sessionId, [...history, userContent, modelContent])
+  const updatedHistory = [...history, userContent, modelContent]
+  // 自动清理：单会话历史超 40 条 content（约 20 轮对话）时，保留最近 40 条，
+  // 避免长驻进程的 geminiSessionHistory 无限增长（含 base64 图片内存占用大）。
+  const MAX_GEMINI_HISTORY = 40
+  geminiSessionHistory.set(
+    sessionId,
+    updatedHistory.length > MAX_GEMINI_HISTORY ? updatedHistory.slice(-MAX_GEMINI_HISTORY) : updatedHistory,
+  )
 
   return { images: selectedImages, text: textParts.length > 0 ? textParts.join('\n') : undefined }
 }

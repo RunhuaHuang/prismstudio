@@ -262,8 +262,16 @@ export async function runGeneration(
     ? (args[refKey] as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined
 
-  // 多轮兜底：图像/视频若有上一轮生成物且支持编辑，自动续接
-  if ((!referencePaths || referencePaths.length === 0) && resolved.config.supportsEdit && modality !== 'audio') {
+  // 多轮兜底：图像/视频若有上一轮生成物且支持编辑，自动续接。
+  // 注意：Gemini（gemini-generate-content）有自己的内存多轮历史（geminiSessionHistory），
+  // 靠 thoughtSignature 续接，不能再用落盘回喂——否则上一轮图会在历史 model turn 和当前
+  // user 前导 part 重复出现两次，导致模型混淆。故对 Gemini 协议跳过此兜底。
+  if (
+    (!referencePaths || referencePaths.length === 0)
+    && resolved.config.supportsEdit
+    && modality !== 'audio'
+    && resolved.config.protocol !== 'gemini-generate-content'
+  ) {
     const last = getLastGenerated(modality, sessionId)
     if (last) referencePaths = [last]
   }
@@ -366,16 +374,28 @@ export function createMcpServer(outputDirOverride?: string): Server {
     })),
   }))
 
-  // 调用工具
+  // 调用工具（失败软降级：返回 isError 文本而非抛异常，与 Run 一致）
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name
     const args = (request.params.arguments ?? {}) as Record<string, unknown>
     const def = tools.find((t) => t.name === toolName)
     if (!def) {
-      throw new Error(`未知工具: ${toolName}`)
+      return {
+        content: [{ type: 'text', text: `未知工具: ${toolName}` }],
+        isError: true,
+      }
     }
-    const { content } = await runGeneration(def.modality, args, { outputDir })
-    return { content }
+    try {
+      const { content } = await runGeneration(def.modality, args, { outputDir })
+      return { content }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const label = def.modality === 'image' ? '图片' : def.modality === 'video' ? '视频' : '音频'
+      return {
+        content: [{ type: 'text', text: `${label}生成失败: ${msg}` }],
+        isError: true,
+      }
+    }
   })
 
   return server
