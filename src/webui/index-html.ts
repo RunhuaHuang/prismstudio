@@ -482,12 +482,13 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
           </div>
 
           <div class="ch-field">
-            <span class="label" x-text="t.labelPreset"></span>
+            <span class="label" x-text="modelLabel(m.key)"></span>
             <select x-model="config[m.key].presetId" @change="onPresetChange(m.key)">
-              <option value="custom" x-text="t.customRouting"></option>
+              <option value="" disabled x-text="t.phSelectModel"></option>
               <template x-for="p in (presets[m.key] || [])" :key="p.id">
                 <option :value="p.id" x-text="p.model + ' · ' + p.vendor"></option>
               </template>
+              <option value="custom" x-text="t.customModel"></option>
             </select>
             <div class="ch-help" x-show="presetHelp(m.key)" x-text="presetHelp(m.key)"></div>
           </div>
@@ -669,7 +670,10 @@ function duoApp() {
         navChannels: '通道', navPlayground: '试用台', navPatch: '接入',
         statusLive: '就绪', statusIdle: '空闲',
         engaged: '已启用', bypassed: '已旁路',
-        labelPreset: '信号源 / 预设', customRouting: '// 自定义路由',
+        modality: { image: '图像', video: '视频', audio: '音频' },
+        modelLabel: { image: '生图模型', video: '视频模型', audio: '音频模型' },
+        phSelectModel: '请选择模型',
+        customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
         phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
         labelModelProto: '模型 / 协议 / BaseURL',
@@ -700,7 +704,10 @@ function duoApp() {
         navChannels: 'Channels', navPlayground: 'Playground', navPatch: 'Patch',
         statusLive: 'LIVE', statusIdle: 'IDLE',
         engaged: 'ENGAGED', bypassed: 'BYPASSED',
-        labelPreset: 'Signal Source / Preset', customRouting: '// custom routing',
+        modality: { image: 'IMAGE', video: 'VIDEO', audio: 'AUDIO' },
+        modelLabel: { image: 'Image Model', video: 'Video Model', audio: 'Audio Model' },
+        phSelectModel: 'Select a model',
+        customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
         phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
         labelModelProto: 'Model / Protocol / BaseURL',
@@ -739,12 +746,18 @@ function duoApp() {
       ];
     },
 
-    modalities: [
-      { key: 'image', no: '01', name: 'IMAGE' },
-      { key: 'video', no: '02', name: 'VIDEO' },
-      { key: 'audio', no: '03', name: 'AUDIO' },
-    ],
-    config: { image: {enabled:false,presetId:'custom',apiKey:''}, video: {enabled:false,presetId:'custom',apiKey:''}, audio: {enabled:false,presetId:'custom',apiKey:''}, outputDir: '' },
+    // 模态列表：name 随语言变化（中文显示图像/视频/音频，英文显示 IMAGE/VIDEO/AUDIO）
+    get modalities() {
+      const m = this.t.modality;
+      return [
+        { key: 'image', no: '01', name: m.image },
+        { key: 'video', no: '02', name: m.video },
+        { key: 'audio', no: '03', name: m.audio },
+      ];
+    },
+    // 按模态返回"模型字段名"（生图模型 / 视频模型 / 音频模型）
+    modelLabel(key) { return this.t.modelLabel[key]; },
+    config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
     presets: { image: [], video: [], audio: [] },
     status: {},
     saving: false, saveMsg: '', saveErr: false,
@@ -793,7 +806,7 @@ function duoApp() {
     async loadConfig() {
       const r = await fetch('/api/config'); this.config = await r.json();
       for (const k of ['image','video','audio']) {
-        if (!this.config[k]) this.config[k] = {enabled:false, presetId:'custom', apiKey:''};
+        if (!this.config[k]) this.config[k] = {enabled:false, presetId:'', apiKey:''};
       }
     },
     async loadPresets() {

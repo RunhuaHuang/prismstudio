@@ -132,10 +132,16 @@ export function getModalityConfig(config: DuoConfig, modality: MediaModality): M
 /**
  * 判断某模态是否"已配置好可用"：enabled + 有 apiKey + 解析后能得到 model。
  * 复用引擎的解析逻辑，避免规则不一致。
+ *
+ * 注意：presetId 必须是已选定的预设 ID 或 'custom'；空字符串 / 'none'（WebUI 初始态）
+ * 表示用户还没选模型，不算就绪。
  */
 export function isModalityReady(config: DuoConfig, modality: MediaModality): boolean {
   const mod = getModalityConfig(config, modality)
   if (!mod?.enabled || !mod.apiKey?.trim()) return false
-  if (mod.presetId === 'custom' && !mod.model?.trim()) return false
+  const presetId = mod.presetId?.trim()
+  // 未选择模型（初始态）：presetId 为空 / 'none' / 'custom' 但没填 model
+  if (!presetId || presetId === 'none') return false
+  if (presetId === 'custom' && !mod.model?.trim()) return false
   return true
 }
