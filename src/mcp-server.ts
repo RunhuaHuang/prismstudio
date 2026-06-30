@@ -299,6 +299,7 @@ export async function runGeneration(
     sampleRate: optionalNumberArg(args, 'sampleRate', 'sample_rate'),
     bitrate: optionalNumberArg(args, 'bitrate'),
     cwd: ctx.outputDir,
+    sessionId,
   })
 
   // 仅图像走数量裁剪

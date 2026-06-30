@@ -5,6 +5,7 @@
  *
  * 协议族：
  * - openai-images：OpenAI gpt-image、豆包 Seedream、智谱 GLM-Image/CogView（图，同步）
+ * - gemini-generate-content：Google Gemini（nano-banana / Gemini Image，图，多轮编辑）
  * - dashscope-async：万相 / Qwen / Vidu / HappyHorse（图、视频，异步轮询）
  * - dashscope-sync：CosyVoice TTS（音频，同步）
  * - dashscope-voice-clone：CosyVoice 声音复刻（音频，两步）
@@ -54,6 +55,7 @@ export type MediaProtocol =
   | 'stability'
   | 'tencent-hunyuan-async'
   | 'midjourney'
+  | 'gemini-generate-content'
 
 // ===== 模型预设 =====
 
@@ -90,6 +92,21 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     modality: 'image', protocol: 'openai-images', baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-image-1', supportsEdit: true, defaultSize: '1024x1024',
     helpUrl: 'https://platform.openai.com/api-keys',
+  },
+  // ===== 图像：Google Gemini（nano-banana / Gemini Image，原生多轮编辑） =====
+  {
+    id: 'gemini-flash-image', label: 'Gemini · Flash Image (nano-banana)', vendor: 'Google',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'gemini-pro-image', label: 'Gemini · Pro Image', vendor: 'Google',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'gemini-3.1-pro-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://aistudio.google.com/apikey',
   },
   {
     id: 'doubao-seedream-5-lite', label: '豆包 · Seedream 5.0 Lite（火山方舟）', vendor: '豆包',
@@ -930,6 +947,8 @@ export interface GenerateMediaInput {
   audioUrl?: string
   aigcWatermark?: boolean
   cwd?: string
+  /** 会话标识，用于 Gemini 多轮历史隔离（其它协议忽略） */
+  sessionId?: string
   fetchFn?: typeof globalThis.fetch
   signal?: AbortSignal
   pollIntervalMs?: number
@@ -969,6 +988,7 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
       if (isZhipuImageModel(config.model)) return callZhipuImageApi(input, fetchFn)
       return callOpenAiImagesApi(input, fetchFn, references)
     }
+    if (protocol === 'gemini-generate-content') return callGeminiImageApi(input, fetchFn, references)
     if (protocol === 'dashscope-async') return callDashscopeImageApi(input, fetchFn, references)
     if (protocol === 'minimax') return callMinimaxImageApi(input, fetchFn, references)
     if (protocol === 'stability') return callStabilityImageApi(input, fetchFn)
@@ -1340,6 +1360,147 @@ async function callOpenAiImagesApi(
     throw new Error('图片 API 未返回图片（请检查模型名、API Key 权限或额度）')
   }
   return { images, text: revisedPrompts.length > 0 ? revisedPrompts.join('\n') : undefined }
+}
+
+// ===== 协议族：gemini-generate-content（Google Gemini / nano-banana，图，原生多轮编辑） =====
+// 移植自 RunAI 的 nano-banana-mcp.ts，收敛进引擎统一分派体系。
+// 特性：Gemini generateContent + inlineData 参考图 + 多轮对话历史（含 thoughtSignature 兼容）。
+
+interface GeminiInlineData {
+  mimeType: string
+  data: string
+}
+interface GeminiPart {
+  text?: string
+  inlineData?: GeminiInlineData
+  thoughtSignature?: string
+  thought_signature?: string
+  /** Flash 思考模式下的 reasoning part，不应作为输出图展示 */
+  thought?: boolean
+}
+interface GeminiContent {
+  role: 'user' | 'model'
+  parts: GeminiPart[]
+}
+interface GeminiResponse {
+  candidates?: Array<{ content: { parts: GeminiPart[]; role: string } }>
+  error?: { message: string; code: number }
+}
+
+/** Gemini 多轮对话历史（按 sessionId 隔离，跨调用保持上下文以支持迭代编辑） */
+const geminiSessionHistory = new Map<string, GeminiContent[]>()
+
+/** thoughtSignature 占位符（多轮编辑必需，见 Gemini 官方文档） */
+const GEMINI_DUMMY_SIGNATURE = 'skip_thought_signature_validator'
+
+function geminiHistoryHasSignature(history: GeminiContent[]): boolean {
+  return history.some((c) => c.parts.some((p) => p.thoughtSignature || p.thought_signature))
+}
+
+/**
+ * 构建 Gemini generateContent 请求体。
+ * 参考图作为 user message 前导 parts（inlineData base64），prompt 作为 text part。
+ */
+function buildGeminiRequest(
+  prompt: string,
+  referenceImageParts: GeminiPart[],
+  history: GeminiContent[],
+  aspectRatio?: string,
+): Record<string, unknown> {
+  const needsSignature = history.length > 0 && geminiHistoryHasSignature(history)
+  const userParts: GeminiPart[] = [
+    ...referenceImageParts,
+    { text: prompt, ...(needsSignature && { thoughtSignature: GEMINI_DUMMY_SIGNATURE }) },
+  ]
+  const generationConfig: Record<string, unknown> = { responseModalities: ['TEXT', 'IMAGE'] }
+  // imageConfig 仅在非默认 aspectRatio（1:1）时附加
+  if (aspectRatio && aspectRatio !== '1:1') {
+    generationConfig.imageConfig = { aspectRatio }
+  }
+  return {
+    contents: [...history, { role: 'user', parts: userParts }],
+    generationConfig,
+  }
+}
+
+/**
+ * 调用 Gemini Image Generation（generateContent）。
+ *
+ * 与其他协议不同：Gemini 的参考图编辑依赖多轮对话上下文，因此用 geminiSessionHistory
+ * 维护历史（含 thoughtSignature）。numberOfImages 仅在响应端裁剪，不转发给 API。
+ */
+async function callGeminiImageApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+): Promise<GenerateMediaOutput> {
+  const model = input.config.model
+  const baseUrl = input.config.baseUrl
+  const apiKey = input.apiKey
+  if (!apiKey?.trim()) throw new Error('未配置 Gemini API Key')
+
+  // sessionId 用于隔离多轮历史；缺省时用固定 key（单轮也能工作）
+  const sessionId = input.sessionId ?? 'duo-gemini'
+  const history = geminiSessionHistory.get(sessionId) ?? []
+
+  // 参考图：引擎已读取为 ReferenceFile，转成 Gemini inlineData parts
+  const referenceImageParts: GeminiPart[] = references.map((r) => ({
+    inlineData: { mimeType: r.mediaType, data: r.base64 },
+  }))
+
+  // 宽高比：size 字段（如 '16:9'）或专门的 aspectRatio
+  const aspectRatio = input.size?.trim() || undefined
+
+  const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio)
+  const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`
+
+  const response = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+    ...(input.signal ? { signal: input.signal } : {}),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '')
+    throw new Error(`Gemini API 请求失败 (${response.status}): ${errorText.slice(0, 200)}`)
+  }
+
+  const data = (await response.json()) as GeminiResponse
+  if (data.error) throw new Error(`Gemini API 错误: ${data.error.message}`)
+  if (!data.candidates?.length) throw new Error('Gemini 未返回任何内容')
+
+  const parts = data.candidates[0]!.content.parts
+
+  // 提取图片（跳过 thought parts）和文本
+  const images: GeneratedImageData[] = []
+  const textParts: string[] = []
+  for (const part of parts) {
+    if (part.thought) continue // Flash 思考过程的推理图，不作为输出
+    if (part.inlineData) {
+      images.push({ mediaType: part.inlineData.mimeType, data: part.inlineData.data })
+    } else if (part.text) {
+      textParts.push(part.text)
+    }
+  }
+
+  // 按请求张数裁剪（numberOfImages 仅在此生效，不转发 API）
+  const selectedImages = selectGeneratedImagesForImageRequest(images, {
+    userMessage: input.prompt,
+    defaultCount: input.numberOfImages ?? 1,
+  })
+
+  // 更新多轮历史（保留原始 parts 含 thoughtSignature）
+  const userContent: GeminiContent = { role: 'user', parts: [...referenceImageParts, { text: input.prompt }] }
+  const modelContent: GeminiContent = { role: 'model', parts }
+  geminiSessionHistory.set(sessionId, [...history, userContent, modelContent])
+
+  return { images: selectedImages, text: textParts.length > 0 ? textParts.join('\n') : undefined }
+}
+
+/** 清理某会话的 Gemini 多轮历史（与 clearMediaGenerationSessionHistory 对应） */
+export function clearGeminiSessionHistory(sessionId: string): void {
+  geminiSessionHistory.delete(sessionId)
 }
 
 // ===== 协议族：dashscope-async（图像 / 视频） =====
