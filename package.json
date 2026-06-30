@@ -1,0 +1,50 @@
+{
+  "name": "duo-mcp",
+  "version": "0.1.0",
+  "description": "独立多模态生成 MCP Server：图像 / 视频 / 音频一键生成，兼容国内外主流模型，内嵌 WebUI 配置与试用台。",
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "bin": {
+    "duo-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "dev:webui": "tsx src/index.ts --webui",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "image-generation",
+    "video-generation",
+    "tts",
+    "audio-generation",
+    "dashscope",
+    "qwen",
+    "cosyvoice",
+    "minimax",
+    "claude",
+    "ai"
+  ]
+}
