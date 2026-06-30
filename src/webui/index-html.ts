@@ -170,6 +170,59 @@ select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns=
 [data-theme="light"] select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%2386867a' d='M2 4l4 4 4-4'/></svg>")}
 textarea{resize:vertical;line-height:1.6}
 
+/* ===== 自建命令菜单下拉（替代原生 select，统一控制台美学） ===== */
+.cmd-select{position:relative;width:100%}
+/* 触发器：与 input 同款，右侧 chevron */
+.cmd-trigger{
+  width:100%;display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);
+  background:var(--surface-4);border:1px solid var(--line);color:var(--text-primary);
+  padding:var(--space-sm) var(--space-md);border-radius:var(--radius);cursor:pointer;
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);text-align:left;
+  transition:border-color .15s,box-shadow .15s;
+}
+.cmd-trigger:hover{border-color:var(--line-bright)}
+.cmd-select.open .cmd-trigger{border-color:var(--signal);box-shadow:0 0 0 3px var(--signal-glow)}
+.cmd-trigger .cmd-val{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-trigger .cmd-val.placeholder{color:var(--text-dim)}
+.cmd-chev{flex-shrink:0;color:var(--text-muted);transition:transform .2s, color .15s;font-size:10px;line-height:1}
+.cmd-select.open .cmd-chev{transform:rotate(180deg);color:var(--signal)}
+/* 弹出菜单：浮层 + 阴影 + 滚动 */
+.cmd-menu{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;
+  background:var(--surface-3);border:1px solid var(--line-bright);border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);max-height:280px;overflow-y:auto;padding:var(--space-xs);
+  animation:cmdIn .14s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes cmdIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+/* 滚动条 */
+.cmd-menu::-webkit-scrollbar{width:8px}
+.cmd-menu::-webkit-scrollbar-track{background:transparent}
+.cmd-menu::-webkit-scrollbar-thumb{background:var(--line-bright);border-radius:4px}
+/* 分组标签（vendor） */
+.cmd-group-label{
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);
+  padding:var(--space-sm) var(--space-sm) var(--space-xs);position:sticky;top:0;
+  background:var(--surface-3);
+}
+.cmd-group-label:first-child{padding-top:var(--space-xs)}
+/* 菜单项 */
+.cmd-item{
+  display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);
+  padding:var(--space-sm);border-radius:var(--radius);cursor:pointer;
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:var(--text-secondary);
+  transition:background .1s,color .1s;
+}
+.cmd-item .cmd-item-main{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-item .cmd-item-tag{flex-shrink:0;font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.04em}
+.cmd-item:hover,.cmd-item.kb-active{background:var(--signal-glow);color:var(--text-primary)}
+.cmd-item.kb-active{box-shadow:inset 2px 0 0 var(--signal)}
+.cmd-item.selected{color:var(--signal)}
+.cmd-item.selected .cmd-item-tag{color:var(--signal-dim)}
+.cmd-item.selected::before{content:"▸";margin-right:var(--space-xs);color:var(--signal)}
+.cmd-item.disabled{color:var(--text-dim);cursor:default;font-style:italic}
+.cmd-item.disabled:hover{background:none;color:var(--text-dim)}
+
 /* 按钮 */
 .btn{
   display:inline-flex;align-items:center;gap:var(--space-sm);
@@ -483,13 +536,29 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 
           <div class="ch-field">
             <span class="label" x-text="modelLabel(m.key)"></span>
-            <select x-model="config[m.key].presetId" @change="onPresetChange(m.key)">
-              <option value="" disabled x-text="t.phSelectModel"></option>
-              <template x-for="p in (presets[m.key] || [])" :key="p.id">
-                <option :value="p.id" x-text="p.model + ' · ' + p.vendor"></option>
-              </template>
-              <option value="custom" x-text="t.customModel"></option>
-            </select>
+            <div class="cmd-select" x-data="dropdown(modelDropdownConfig(m.key))"
+                 x-ref="root" :class="open && 'open'"
+                 @select="onModelSelect(m.key, $event)">
+              <button type="button" class="cmd-trigger" @click="toggle" @keydown="onKeydown"
+                      :aria-expanded="open">
+                <span class="cmd-val" :class="isPlaceholder && 'placeholder'" x-text="triggerLabel"></span>
+                <span class="cmd-chev">▾</span>
+              </button>
+              <div class="cmd-menu" x-show="open" @click.away="close">
+                <template x-for="(grp, gi) in groups" :key="gi">
+                  <div>
+                    <div class="cmd-group-label" x-show="grp.label && grp.label !== '—'" x-text="grp.label"></div>
+                    <template x-for="item in grp.items" :key="item.value">
+                      <div class="cmd-item" :class="{ selected: value===item.value, 'kb-active': isKbActive(item), disabled: item.disabled }"
+                           @click="pick(item)" @mouseenter="kbIndex = _flat.indexOf(item)">
+                        <span class="cmd-item-main" x-text="item.label"></span>
+                        <span class="cmd-item-tag" x-show="item.tag" x-text="item.tag"></span>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </div>
             <div class="ch-help" x-show="presetHelp(m.key)" x-text="presetHelp(m.key)"></div>
           </div>
 
@@ -562,11 +631,22 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
           </div>
           <div x-show="test.modality==='audio'">
             <span class="label" x-text="t.labelTask"></span>
-            <select x-model="test.task">
-              <option value="tts" x-text="t.taskTts"></option>
-              <option value="music" x-text="t.taskMusic"></option>
-              <option value="clone" x-text="t.taskClone"></option>
-            </select>
+            <div class="cmd-select" x-data="dropdown(taskDropdownConfig())"
+                 x-ref="root" :class="open && 'open'"
+                 @select="onTaskSelect($event)">
+              <button type="button" class="cmd-trigger" @click="toggle" @keydown="onKeydown" :aria-expanded="open">
+                <span class="cmd-val" :class="isPlaceholder && 'placeholder'" x-text="triggerLabel"></span>
+                <span class="cmd-chev">▾</span>
+              </button>
+              <div class="cmd-menu" x-show="open" @click.away="close">
+                <template x-for="item in groups[0].items" :key="item.value">
+                  <div class="cmd-item" :class="{ selected: value===item.value, 'kb-active': isKbActive(item) }"
+                       @click="pick(item)" @mouseenter="kbIndex = _flat.indexOf(item)">
+                    <span class="cmd-item-main" x-text="item.label"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
           </div>
           <div x-show="test.modality==='audio' && test.task==='tts'">
             <span class="label" x-text="t.labelVoice"></span>
@@ -655,6 +735,76 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 </div>
 
 <script>
+/**
+ * 自建命令菜单下拉组件（替代原生 <select>，统一控制台美学）。
+ *
+ * 用法：x-data="dropdown({ getValue: ()=>当前值, getGroups: ()=>[...], placeholder })"
+ *   getGroups(): [{ label?(可选), items:[{value,label,tag?(可选),disabled?}] }]
+ * value/groups 通过 getter 从父级响应式读取，语言切换/外部改动自动同步。
+ * 触发选中：组件 $dispatch('select', {value}) 冒泡，外层 @select 监听。
+ * 键盘：ArrowDown/Up 移动高亮，Enter 选中，Esc 关闭。
+ * 鼠标：hover 高亮，click 选中；点击外部自动关闭。
+ */
+function dropdown(initial) {
+  return {
+    open: false,
+    kbIndex: -1,
+    placeholder: initial.placeholder || '',
+    _getValue: initial.getValue || (()=>''),
+    _getGroups: initial.getGroups || (()=>[]),
+
+    // 响应式：每次访问都从父级读最新值/分组
+    get value() { return this._getValue() },
+    get groups() { return this._getGroups() },
+    get _flat() {
+      const out = []
+      for (const g of this.groups) for (const it of (g.items || [])) if (!it.disabled) out.push(it)
+      return out
+    },
+    get triggerLabel() {
+      const v = this.value
+      for (const g of this.groups) {
+        const f = (g.items || []).find(i => i.value === v)
+        if (f) return f.label
+      }
+      return this.placeholder
+    },
+    get isPlaceholder() { return !this.value },
+    toggle() { this.open ? this.close() : this.openMenu() },
+    openMenu() {
+      this.open = true
+      const idx = this._flat.findIndex(i => i.value === this.value)
+      this.kbIndex = idx >= 0 ? idx : (this._flat.length ? 0 : -1)
+      this.$nextTick(() => this.scrollKbIntoView())
+    },
+    close() { this.open = false },
+    pick(item) {
+      if (item.disabled) return
+      this.close()
+      this.$dispatch('select', { value: item.value })
+    },
+    onKeydown(e) {
+      if (!this.open) {
+        if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openMenu() }
+        return
+      }
+      const n = this._flat.length
+      if (n === 0) return
+      if (e.key === 'ArrowDown') { e.preventDefault(); this.kbIndex = (this.kbIndex + 1) % n; this.scrollKbIntoView() }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this.kbIndex = (this.kbIndex - 1 + n) % n; this.scrollKbIntoView() }
+      else if (e.key === 'Enter') { e.preventDefault(); if (this.kbIndex >= 0) this.pick(this._flat[this.kbIndex]) }
+      else if (e.key === 'Escape') { e.preventDefault(); this.close() }
+    },
+    scrollKbIntoView() {
+      this.$nextTick(() => {
+        const el = this.$refs.root && this.$refs.root.querySelector('.cmd-item.kb-active')
+        if (el) el.scrollIntoView({ block: 'nearest' })
+      })
+    },
+    isKbActive(item) { return this._flat.indexOf(item) === this.kbIndex },
+  }
+}
+
 function duoApp() {
   return {
     tab: 'config',
@@ -757,6 +907,46 @@ function duoApp() {
     },
     // 按模态返回"模型字段名"（生图模型 / 视频模型 / 音频模型）
     modelLabel(key) { return this.t.modelLabel[key]; },
+
+    // 构建模型下拉的配置（按 vendor 分组 + 末尾自定义项），供 dropdown 组件消费
+    // 通过 getter 从父级响应式读取，语言切换/外部改动自动同步
+    modelDropdownConfig(key) {
+      const self = this
+      return {
+        placeholder: self.t.phSelectModel,
+        getValue: () => self.config[key]?.presetId || '',
+        getGroups: () => {
+          const byVendor = {}
+          for (const p of (self.presets[key] || [])) {
+            (byVendor[p.vendor] = byVendor[p.vendor] || []).push({
+              value: p.id, label: p.model, tag: p.protocol,
+            })
+          }
+          const groups = Object.entries(byVendor).map(([vendor, items]) => ({ label: vendor, items }))
+          groups.push({ label: '—', items: [{ value: 'custom', label: self.t.customModel }] })
+          return groups
+        },
+      }
+    },
+    // 试用台任务下拉配置（tts/music/clone）
+    taskDropdownConfig() {
+      const self = this
+      return {
+        placeholder: '',
+        getValue: () => self.test.task,
+        getGroups: () => [{ items: [
+          { value: 'tts', label: self.t.taskTts },
+          { value: 'music', label: self.t.taskMusic },
+          { value: 'clone', label: self.t.taskClone },
+        ]}],
+      }
+    },
+    // dropdown 选中事件 → 写回 config
+    onModelSelect(key, e) {
+      this.config[key].presetId = e.detail.value
+      this.onPresetChange(key)
+    },
+    onTaskSelect(e) { this.test.task = e.detail.value; },
     config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
     presets: { image: [], video: [], audio: [] },
     status: {},
