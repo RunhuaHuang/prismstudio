@@ -1,10 +1,15 @@
 /**
- * WebUI 单文件页面（Alpine.js + Tailwind CDN，零构建）
+ * WebUI 单文件页面（Alpine.js + 定制设计系统，零构建）
+ *
+ * 设计方向：Industrial Studio Console（工业工作室控制台）
+ * - 三模态 = 三条通道（channel strip），各有信号灯/状态
+ * - JetBrains Mono（数据/标签/代码）+ Space Grotesk（标题/正文）双字族
+ * - 深色暖调底 + 单一信号色 acid lime（就绪/运行态）
  *
  * 三大区块：
- * 1. 配置：image / video / audio 三模态，各选 preset + 填 apiKey（可临时测试连通）
- * 2. 试用台（Playground）：选模态 + prompt + 参数 → 生成 → 内联预览图片/音频、路径展示视频
- * 3. 接入向导：选目标 agent → 一键复制 mcpServers JSON
+ * 1. 通道配置（CHANNELS）：image / video / audio 三模态信号链
+ * 2. 试用台（PLAYGROUND）：选模态 + prompt → 生成 → 内联预览
+ * 3. 接入向导（PATCH）：选 agent → 一键复制 mcpServers JSON
  *
  * 所有交互通过 fetch 调用 /api/* REST 端点。
  */
@@ -14,207 +19,555 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Duo-MCP · 多模态生成配置台</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<title>DUO-MCP · Multi-Modal Generation Console</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
-  .tab-active { background: #4f46e5; color: white; }
+/* ===== 设计令牌：Industrial Studio Console ===== */
+:root{
+  /* 表面层：深色暖调，逐层抬升 */
+  --surface-0:#0c0d0a;            /* 最底（页面背景） */
+  --surface-1:#14161100;          /* 留作透明叠加占位 */
+  --surface-2:#1a1c16;            /* 卡片底 */
+  --surface-3:#232520;            /* 抬升面板 */
+  --surface-4:#2d3028;            /* 输入/高亮面 */
+
+  /* 文本 */
+  --text-primary:#ecebe1;         /* 主文字，暖白 */
+  --text-secondary:#b8b8a8;       /* 次文字（提亮，改善对比度） */
+  --text-muted:#7a7b6c;           /* 标签/弱化 */
+  --text-dim:#494a41;             /* 最弱 */
+
+  /* 信号色 */
+  --signal:#c4f542;               /* acid lime · 就绪/运行/主强调 */
+  --signal-dim:#7a9426;
+  --signal-glow:rgba(196,245,66,.35);
+
+  /* 反馈 */
+  --warn:#f5a142;
+  --error:#f55d5d;
+  --info:#5fb8f5;
+
+  /* 线条 */
+  --line:#2f3128;
+  --line-bright:#42453a;
+
+  /* 间距尺度 */
+  --space-xs:.375rem; --space-sm:.625rem; --space-md:1rem;
+  --space-lg:1.75rem; --space-xl:3rem; --space-2xl:5rem;
+
+  /* 字号 */
+  --fs-mono-xs:.6875rem; --fs-mono-sm:.75rem; --fs-mono-md:.8125rem;
+  --fs-display-xl:clamp(2rem,5vw,3.25rem);
+  --fs-display-lg:clamp(1.5rem,3vw,2.125rem);
+  --fs-body:.9375rem;
+
+  /* 阴影：分层、低扩散，工业感 */
+  --shadow-sm:0 1px 0 var(--line);
+  --shadow-md:0 8px 24px -12px rgba(0,0,0,.6), 0 1px 0 var(--line) inset;
+  --shadow-lg:0 20px 50px -20px rgba(0,0,0,.8), 0 1px 0 var(--line-bright) inset;
+
+  --radius:2px;                    /* 接近直角，仪器感 */
+  --radius-lg:3px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html,body{
+  background:var(--surface-0);
+  color:var(--text-primary);
+  font-family:'Space Grotesk',sans-serif;
+  font-size:var(--fs-body);
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;
+}
+
+/* 背景纹理：极淡的网格 + 噪点，工业控制台底子 */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background-image:
+    linear-gradient(var(--line) 1px,transparent 1px),
+    linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:64px 64px;
+  opacity:.25;
+  mask-image:radial-gradient(ellipse at top,#000 0%,transparent 75%);
+}
+/* 噪点叠加 */
+body::after{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9 0 0 0 0 .9 0 0 0 0 .85 0 0 0 .5 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
+  opacity:.04;
+}
+
+.mono{font-family:'JetBrains Mono',monospace;font-feature-settings:"ss01","ss02"}
+
+/* ===== 通用控件 ===== */
+.wrap{max-width:1080px;margin:0 auto;padding:var(--space-xl) var(--space-lg) var(--space-2xl)}
+
+.label{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:500;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+
+input,select,textarea{
+  width:100%;background:var(--surface-4);border:1px solid var(--line);
+  color:var(--text-primary);padding:var(--space-sm) var(--space-md);
+  border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);
+  transition:border-color .15s,box-shadow .15s;
+}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--signal);
+  box-shadow:0 0 0 3px var(--signal-glow)}
+input::placeholder,textarea::placeholder{color:var(--text-dim)}
+select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%23a8a89a' d='M2 4l4 4 4-4'/></svg>");
+  background-repeat:no-repeat;background-position:right var(--space-md) center;padding-right:2.25rem}
+textarea{resize:vertical;line-height:1.6}
+
+/* 按钮 */
+.btn{
+  display:inline-flex;align-items:center;gap:var(--space-sm);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;padding:var(--space-sm) var(--space-lg);
+  border-radius:var(--radius);border:1px solid var(--line-bright);background:var(--surface-3);
+  color:var(--text-primary);cursor:pointer;transition:all .15s;
+}
+.btn:hover{border-color:var(--signal);color:var(--signal)}
+.btn-primary{background:var(--signal);color:#0c0d0a;border-color:var(--signal)}
+.btn-primary:hover{background:#d4ff52;color:#0c0d0a;box-shadow:0 0 24px var(--signal-glow)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn:disabled:hover{border-color:var(--line-bright);color:var(--text-primary);box-shadow:none;background:var(--surface-3)}
+
+/* ===== 顶栏：设备铭牌 ===== */
+.console-head{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-lg);
+  padding-bottom:var(--space-lg);margin-bottom:var(--space-xl);
+  border-bottom:1px solid var(--line);
+  flex-wrap:wrap;
+}
+.brand-mark{display:flex;align-items:baseline;gap:var(--space-md);flex-wrap:wrap}
+.brand-logo{
+  font-family:'JetBrains Mono',monospace;font-weight:700;font-size:var(--fs-display-lg);
+  letter-spacing:-.04em;color:var(--text-primary);line-height:1;
+}
+.brand-logo .dot{color:var(--signal)}
+.brand-tag{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);
+  color:var(--text-secondary);letter-spacing:.05em}
+.device-id{
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-muted);
+  letter-spacing:.1em;text-align:right;line-height:1.7;
+}
+.device-id code{color:var(--text-secondary);background:var(--surface-2);padding:1px 6px;border-radius:var(--radius)}
+
+/* ===== 导航：信号灯式 Tab ===== */
+.nav-bar{display:flex;gap:0;margin-bottom:var(--space-xl);border-bottom:1px solid var(--line)}
+.nav-tab{
+  display:flex;align-items:center;gap:var(--space-sm);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:500;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);
+  padding:var(--space-md) var(--space-lg);background:none;border:none;cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .15s;position:relative;
+}
+.nav-tab:hover{color:var(--text-secondary)}
+.nav-tab.active{color:var(--signal);border-bottom-color:var(--signal)}
+.nav-tab .idx{font-size:var(--fs-mono-xs);color:var(--text-dim)}
+.nav-tab.active .idx{color:var(--signal-dim)}
+.nav-led{width:6px;height:6px;border-radius:50%;background:var(--text-dim);transition:all .2s}
+.nav-tab.active .nav-led{background:var(--signal);box-shadow:0 0 8px var(--signal-glow)}
+
+/* ===== 通道卡片（CHANNEL STRIP） ===== */
+.channel-grid{display:grid;grid-template-columns:1fr;gap:var(--space-md)}
+@media(min-width:820px){.channel-grid{grid-template-columns:repeat(3,1fr)}}
+
+.channel{
+  background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);
+  padding:var(--space-lg);position:relative;overflow:hidden;
+  transition:border-color .2s,transform .2s;
+}
+.channel::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:var(--line-bright);transition:background .2s;
+}
+.channel.live::before{background:var(--signal);box-shadow:0 0 12px var(--signal-glow)}
+.channel:hover{border-color:var(--line-bright)}
+
+.ch-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)}
+.ch-id{display:flex;align-items:center;gap:var(--space-sm)}
+.ch-led{
+  width:8px;height:8px;border-radius:50%;background:var(--text-dim);
+  position:relative;transition:background .2s;
+}
+.channel.live .ch-led{background:var(--signal);box-shadow:0 0 0 3px rgba(196,245,66,.15)}
+/* 信号灯呼吸（仅 live 通道） */
+.channel.live .ch-led::after{
+  content:"";position:absolute;inset:-4px;border-radius:50%;
+  border:1px solid var(--signal);opacity:0;
+  animation:pulse 2s ease-out infinite;
+}
+@keyframes pulse{0%{opacity:.6;transform:scale(.8)}100%{opacity:0;transform:scale(2)}}
+
+.ch-name{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:var(--fs-mono-md);
+  letter-spacing:.05em;color:var(--text-primary);text-transform:uppercase}
+.ch-no{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim)}
+
+.ch-status{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);
+  padding:2px 8px;border:1px solid var(--line);border-radius:var(--radius);
+}
+.channel.live .ch-status{color:var(--signal);border-color:var(--signal-dim);background:rgba(196,245,66,.06)}
+
+.ch-field{margin-bottom:var(--space-md)}
+.ch-field:last-child{margin-bottom:0}
+.ch-field .label{display:block;margin-bottom:var(--space-xs)}
+.ch-help{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim);
+  margin-top:var(--space-xs);line-height:1.5;word-break:break-all}
+
+/* 开关：拨杆式 */
+.toggle{display:inline-flex;align-items:center;gap:var(--space-sm);cursor:pointer}
+.toggle input{display:none}
+.toggle-track{
+  width:36px;height:18px;background:var(--surface-4);border:1px solid var(--line-bright);
+  border-radius:9px;position:relative;transition:all .2s;
+}
+.toggle-track::after{
+  content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:50%;
+  background:var(--text-muted);transition:all .2s;
+}
+.toggle input:checked + .toggle-track{background:rgba(196,245,66,.15);border-color:var(--signal-dim)}
+.toggle input:checked + .toggle-track::after{transform:translateX(18px);background:var(--signal)}
+.toggle-label{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary)}
+
+/* 全局输出目录 + 保存 */
+.master-section{margin-top:var(--space-lg);padding-top:var(--space-lg);border-top:1px dashed var(--line)}
+.save-bar{display:flex;align-items:center;gap:var(--space-md);margin-top:var(--space-lg)}
+.save-msg{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm)}
+.save-msg.ok{color:var(--signal)} .save-msg.err{color:var(--error)}
+
+/* ===== 试用台 PLAYGROUND ===== */
+.pg-grid{display:grid;grid-template-columns:1fr;gap:var(--space-lg)}
+@media(min-width:880px){.pg-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.1fr)}}
+
+.pg-panel{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:var(--space-lg)}
+.pg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)}
+.pg-title{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--text-secondary)}
+
+.modality-switch{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.modality-switch button{
+  background:var(--surface-3);border:none;color:var(--text-muted);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;padding:var(--space-sm);
+  cursor:pointer;transition:all .15s;border-right:1px solid var(--line);
+}
+.modality-switch button:last-child{border-right:none}
+.modality-switch button.active{background:var(--signal);color:#0c0d0a}
+.modality-switch button:hover:not(.active){color:var(--text-secondary);background:var(--surface-4)}
+
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);margin-top:var(--space-md)}
+.warn-banner{
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--warn);
+  background:rgba(245,161,66,.06);border:1px solid rgba(245,161,66,.3);border-radius:var(--radius);
+  padding:var(--space-sm) var(--space-md);margin-top:var(--space-md);line-height:1.6;
+}
+
+.pg-result{
+  background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);
+  padding:var(--space-lg);min-height:340px;display:flex;flex-direction:column;
+}
+.result-empty{margin:auto;color:var(--text-dim);text-align:center}
+.result-empty .icon{font-size:2.5rem;margin-bottom:var(--space-sm);opacity:.4}
+.result-item{border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-sm);background:var(--surface-3);margin-bottom:var(--space-sm)}
+.result-item img{max-width:100%;height:auto;border-radius:var(--radius);display:block;margin:0 auto}
+.result-item audio{width:100%}
+.result-meta{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-muted);margin-top:var(--space-xs)}
+.result-summary{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary);white-space:pre-line;line-height:1.6;margin-top:var(--space-sm)}
+.err-text{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--error);margin-top:var(--space-md)}
+
+/* 生成中的扫描线动画 */
+.scan-line{position:relative;overflow:hidden}
+.scan-line::after{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--signal),transparent);
+  animation:scan 1.4s ease-in-out infinite;
+}
+@keyframes scan{0%{transform:translateY(0)}100%{transform:translateY(330px)}}
+
+/* ===== 接入向导 PATCH ===== */
+.patch-panel{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:var(--space-lg)}
+.patch-intro{color:var(--text-secondary);margin-bottom:var(--space-lg);max-width:60ch;line-height:1.6}
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--space-sm);margin-bottom:var(--space-lg)}
+.agent-chip{
+  background:var(--surface-3);border:1px solid var(--line-bright);border-radius:var(--radius);padding:var(--space-md);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary);
+  cursor:pointer;transition:all .15s;text-align:left;letter-spacing:.04em;
+}
+.agent-chip:hover{border-color:var(--signal-dim);color:var(--text-primary);background:var(--surface-4)}
+.agent-chip.active{background:rgba(196,245,66,.08);border-color:var(--signal);color:var(--signal)}
+
+.patch-note{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--warn);
+  background:rgba(245,161,66,.06);border-left:2px solid var(--warn);padding:var(--space-md);
+  margin-top:var(--space-md);margin-bottom:var(--space-lg);line-height:1.6}
+
+.code-block{
+  background:#0a0b08;border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-lg);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:#c8c8b8;
+  overflow-x:auto;line-height:1.8;white-space:pre;
+}
+/* JSON 语法着色 */
+.code-block .tok-key{color:var(--signal)}
+.code-block .tok-str{color:#e8b878}
+.code-block .tok-num{color:#5fb8f5}
+.code-block .tok-punc{color:var(--text-muted)}
+.code-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)}
+.copy-btn{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--signal);
+  background:var(--surface-3);border:1px solid var(--signal-dim);border-radius:var(--radius);
+  cursor:pointer;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;transition:all .15s}
+.copy-btn:hover{background:rgba(196,245,66,.12);border-color:var(--signal)}
+
+/* ===== 页脚 ===== */
+.foot{
+  margin-top:var(--space-2xl);padding-top:var(--space-lg);border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--space-md);
+}
+.foot-text{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.08em}
+.foot-dots{display:flex;gap:6px}
+.foot-dots span{width:6px;height:6px;border-radius:50%;background:var(--text-dim)}
+.foot-dots span:first-child{background:var(--signal)}
+
+/* 进入动画 */
+[x-cloak]{display:none!important}
+.fade-enter{animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* 响应式：窄屏 */
+@media(max-width:640px){
+  .wrap{padding:var(--space-lg) var(--space-md) var(--space-2xl)}
+  .field-row{grid-template-columns:1fr}
+}
 </style>
 </head>
-<body class="bg-slate-50 text-slate-800 min-h-screen">
-<div x-data="duoApp()" x-init="init()" class="max-w-5xl mx-auto px-4 py-8">
+<body>
+<div class="wrap" x-data="duoApp()" x-init="init()" x-cloak>
 
-  <!-- 标题 -->
-  <header class="mb-8">
-    <h1 class="text-3xl font-bold text-slate-900">🎨 Duo-MCP</h1>
-    <p class="text-slate-500 mt-1">独立多模态生成 MCP · 图像 / 视频 / 音频一键生成 · <a href="https://github.com" target="_blank" class="text-indigo-600 hover:underline">GitHub</a></p>
-    <div class="mt-3 text-sm text-slate-400">
-      配置文件：<code x-text="status.configPath || '~/.duo-mcp/config.json'" class="bg-slate-200 px-1.5 py-0.5 rounded"></code>
-      <span x-show="status.outputDir"> · 输出目录：<code x-text="status.outputDir" class="bg-slate-200 px-1.5 py-0.5 rounded"></code></span>
+  <!-- ===== 顶栏：设备铭牌 ===== -->
+  <header class="console-head">
+    <div class="brand-mark">
+      <div class="brand-logo">DUO<span class="dot">·</span>MCP</div>
+      <span class="brand-tag">// multi-modal generation console</span>
+    </div>
+    <div class="device-id">
+      <div>UNIT <code x-text="status.configPath ? status.configPath.split('/').slice(-2).join('/') : '~/.duo-mcp'"></code></div>
+      <div>OUT <code x-text="status.outputDir ? status.outputDir.split('/').slice(-2).join('/') : 'generated-media'"></code></div>
     </div>
   </header>
 
-  <!-- Tab 切换 -->
-  <nav class="flex gap-2 mb-6">
-    <button @click="tab='config'" :class="tab==='config' ? 'tab-active' : 'bg-white border'" class="px-4 py-2 rounded-lg text-sm font-medium transition">⚙️ 配置</button>
-    <button @click="tab='playground'" :class="tab==='playground' ? 'tab-active' : 'bg-white border'" class="px-4 py-2 rounded-lg text-sm font-medium transition">🧪 试用台</button>
-    <button @click="tab='connect'" :class="tab==='connect' ? 'tab-active' : 'bg-white border'" class="px-4 py-2 rounded-lg text-sm font-medium transition">🔌 接入向导</button>
+  <!-- ===== 导航 ===== -->
+  <nav class="nav-bar">
+    <button class="nav-tab" :class="tab==='config' && 'active'" @click="tab='config'">
+      <span class="nav-led"></span><span class="idx">01</span> Channels
+    </button>
+    <button class="nav-tab" :class="tab==='playground' && 'active'" @click="tab='playground'">
+      <span class="nav-led"></span><span class="idx">02</span> Playground
+    </button>
+    <button class="nav-tab" :class="tab==='connect' && 'active'" @click="tab='connect'">
+      <span class="nav-led"></span><span class="idx">03</span> Patch
+    </button>
   </nav>
 
-  <!-- ============ 配置页 ============ -->
-  <section x-show="tab==='config'" class="space-y-6">
-    <template x-for="m in modalities" :key="m.key">
-      <div class="bg-white rounded-xl shadow-sm border p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold flex items-center gap-2">
-            <span x-text="m.icon"></span> <span x-text="m.label"></span>生成
-            <span x-show="config[m.key]?.enabled && config[m.key]?.apiKey" class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">已就绪</span>
-          </h2>
-          <label class="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" x-model="config[m.key].enabled" class="w-4 h-4" />
-            启用
-          </label>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs font-medium text-slate-500 mb-1">预设模型</label>
-            <select x-model="config[m.key].presetId" @change="onPresetChange(m.key)" class="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="custom">自定义（手动填 model/protocol/baseUrl）</option>
+  <!-- ===== 01 CHANNELS：通道配置 ===== -->
+  <section x-show="tab==='config'" class="fade-enter">
+    <div class="channel-grid">
+      <template x-for="m in modalities" :key="m.key">
+        <div class="channel" :class="config[m.key]?.enabled && config[m.key]?.apiKey && 'live'">
+          <div class="ch-head">
+            <div class="ch-id">
+              <span class="ch-led"></span>
+              <span class="ch-no mono" x-text="'CH ' + m.no"></span>
+              <span class="ch-name" x-text="m.name"></span>
+            </div>
+            <span class="ch-status" x-text="(config[m.key]?.enabled && config[m.key]?.apiKey) ? 'LIVE' : 'IDLE'"></span>
+          </div>
+
+          <div class="ch-field">
+            <label class="toggle">
+              <input type="checkbox" x-model="config[m.key].enabled" />
+              <span class="toggle-track"></span>
+              <span class="toggle-label" x-text="config[m.key]?.enabled ? 'ENGAGED' : 'BYPASSED'"></span>
+            </label>
+          </div>
+
+          <div class="ch-field">
+            <span class="label">Signal Source / Preset</span>
+            <select x-model="config[m.key].presetId" @change="onPresetChange(m.key)">
+              <option value="custom">// custom routing</option>
               <template x-for="p in (presets[m.key] || [])" :key="p.id">
-                <option :value="p.id" x-text="p.label + ' · ' + p.vendor + ' · ' + p.model"></option>
+                <option :value="p.id" x-text="p.model + ' · ' + p.vendor"></option>
               </template>
             </select>
-            <p class="text-xs text-slate-400 mt-1" x-show="presetHelp(m.key)" x-text="presetHelp(m.key)"></p>
+            <div class="ch-help" x-show="presetHelp(m.key)" x-text="presetHelp(m.key)"></div>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-slate-500 mb-1">API Key</label>
-            <input type="password" x-model="config[m.key].apiKey" :placeholder="config[m.key]?.apiKey?.includes('****') ? '已保存（重新输入可覆盖）' : '输入 API Key'" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
-          </div>
-          <div x-show="config[m.key].presetId === 'custom'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">模型名 (model)</label>
-            <input type="text" x-model="config[m.key].model" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
-          </div>
-          <div x-show="config[m.key].presetId === 'custom'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">协议 (protocol)</label>
-            <input type="text" x-model="config[m.key].protocol" placeholder="如 openai-images / dashscope-sync" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
-          </div>
-          <div x-show="config[m.key].presetId === 'custom'" class="md:col-span-2">
-            <label class="block text-xs font-medium text-slate-500 mb-1">Base URL（可选，预设自带则留空）</label>
-            <input type="text" x-model="config[m.key].baseUrl" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
-          </div>
-        </div>
-      </div>
-    </template>
 
-    <!-- 输出目录 -->
-    <div class="bg-white rounded-xl shadow-sm border p-5">
-      <label class="block text-xs font-medium text-slate-500 mb-1">生成物输出目录（可选，留空则用默认 ~/.duo-mcp/generated-media）</label>
-      <input type="text" x-model="config.outputDir" placeholder="如 /Users/you/media-out" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+          <div class="ch-field">
+            <span class="label">API Key</span>
+            <input type="password" x-model="config[m.key].apiKey"
+              :placeholder="config[m.key]?.apiKey?.includes('****') ? 'stored · retype to overwrite' : 'paste key here'" />
+          </div>
+
+          <template x-if="config[m.key].presetId === 'custom'">
+            <div class="ch-field">
+              <span class="label">Model / Protocol / BaseURL</span>
+              <input type="text" x-model="config[m.key].model" placeholder="model-id" style="margin-bottom:6px" />
+              <input type="text" x-model="config[m.key].protocol" placeholder="protocol (e.g. openai-images)" style="margin-bottom:6px" />
+              <input type="text" x-model="config[m.key].baseUrl" placeholder="base url (optional)" />
+            </div>
+          </template>
+        </div>
+      </template>
     </div>
 
-    <div class="flex items-center gap-3">
-      <button @click="saveConfig()" :disabled="saving" class="bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-        <span x-show="!saving">💾 保存配置</span>
-        <span x-show="saving">保存中…</span>
-      </button>
-      <span x-show="saveMsg" :class="saveErr ? 'text-red-600' : 'text-green-600'" class="text-sm" x-text="saveMsg"></span>
+    <!-- 主输出 + 保存 -->
+    <div class="master-section">
+      <div class="ch-field" style="margin:0">
+        <span class="label">Master Output Directory</span>
+        <input type="text" x-model="config.outputDir" placeholder="blank = ~/.duo-mcp/generated-media" />
+      </div>
+      <div class="save-bar">
+        <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">
+          <span x-show="!saving">▸ Commit Config</span>
+          <span x-show="saving">committing…</span>
+        </button>
+        <span class="save-msg" :class="saveErr ? 'err' : 'ok'" x-show="saveMsg" x-text="saveMsg"></span>
+      </div>
     </div>
   </section>
 
-  <!-- ============ 试用台 ============ -->
-  <section x-show="tab==='playground'" class="bg-white rounded-xl shadow-sm border p-5">
-    <h2 class="text-lg font-semibold mb-4">🧪 试用台</h2>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="space-y-3">
-        <div>
-          <label class="block text-xs font-medium text-slate-500 mb-1">模态</label>
-          <select x-model="test.modality" class="w-full border rounded-lg px-3 py-2 text-sm">
-            <option value="image">🖼️ 图片</option>
-            <option value="video">🎬 视频</option>
-            <option value="audio">🔊 音频</option>
-          </select>
+  <!-- ===== 02 PLAYGROUND：试用台 ===== -->
+  <section x-show="tab==='playground'" class="fade-enter">
+    <div class="pg-grid">
+      <!-- 左：控制 -->
+      <div class="pg-panel">
+        <div class="pg-head">
+          <span class="pg-title">◢ Signal Generator</span>
         </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-500 mb-1">Prompt <span x-show="test.modality==='audio'">/ 文本</span></label>
-          <textarea x-model="test.prompt" rows="4" placeholder="描述你要生成的内容…" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
+
+        <div class="modality-switch">
+          <template x-for="m in modalities" :key="m.key">
+            <button :class="test.modality===m.key && 'active'" @click="test.modality=m.key" x-text="m.name"></button>
+          </template>
         </div>
-        <div class="grid grid-cols-2 gap-3">
+
+        <div style="margin-top:var(--space-md)">
+          <span class="label">Prompt <span x-show="test.modality==='audio'">/ Text</span></span>
+          <textarea x-model="test.prompt" rows="4" placeholder="describe what to generate…"></textarea>
+        </div>
+
+        <div class="field-row">
           <div x-show="test.modality==='image'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">数量</label>
-            <input type="number" min="1" max="4" x-model.number="test.numberOfImages" class="w-full border rounded-lg px-3 py-2 text-sm" />
+            <span class="label">Count</span>
+            <input type="number" min="1" max="4" x-model.number="test.numberOfImages" />
           </div>
           <div x-show="test.modality==='image'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">尺寸</label>
-            <input type="text" x-model="test.size" placeholder="1024x1024" class="w-full border rounded-lg px-3 py-2 text-sm" />
+            <span class="label">Size</span>
+            <input type="text" x-model="test.size" placeholder="1024x1024" />
           </div>
           <div x-show="test.modality==='video'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">时长(秒)</label>
-            <input type="number" min="1" max="60" x-model.number="test.duration" class="w-full border rounded-lg px-3 py-2 text-sm" />
+            <span class="label">Duration (s)</span>
+            <input type="number" min="1" max="60" x-model.number="test.duration" />
           </div>
           <div x-show="test.modality==='audio'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">任务</label>
-            <select x-model="test.task" class="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="tts">语音合成 (tts)</option>
-              <option value="music">音乐 (music)</option>
-              <option value="clone">声音克隆 (clone)</option>
+            <span class="label">Task</span>
+            <select x-model="test.task">
+              <option value="tts">tts · speech</option>
+              <option value="music">music</option>
+              <option value="clone">clone</option>
             </select>
           </div>
           <div x-show="test.modality==='audio' && test.task==='tts'">
-            <label class="block text-xs font-medium text-slate-500 mb-1">音色 voice</label>
-            <input type="text" x-model="test.voice" placeholder="如 Cherry / male-qn-qingse" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+            <span class="label">Voice</span>
+            <input type="text" x-model="test.voice" placeholder="e.g. Cherry" />
           </div>
         </div>
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800" x-show="test.modality && !isReady(test.modality)">
-          ⚠️ 该模态尚未在配置页启用/填 Key，生成会失败。请先到「配置」页设置，或在下方临时填 Key 试用。
+
+        <div class="warn-banner" x-show="test.modality && !isReady(test.modality)">
+          ⚠ CHANNEL NOT LIVE — this modality has no stored key. Set it in Channels, or paste a key below for one-shot testing.
         </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-500 mb-1">临时 API Key（可选，不保存到配置）</label>
-          <input type="password" x-model="test.tempKey" placeholder="留空则用配置页保存的 Key" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" />
+
+        <div style="margin-top:var(--space-lg)">
+          <span class="label">Temp Key <span style="text-transform:none;color:var(--text-dim)">(one-shot, not stored)</span></span>
+          <input type="password" x-model="test.tempKey" placeholder="blank = use stored key" />
         </div>
-        <button @click="runTest()" :disabled="testing" class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-          <span x-show="!testing">✨ 生成</span>
-          <span x-show="testing">生成中…（视频可能需 1-5 分钟）</span>
+
+        <button class="btn btn-primary" style="margin-top:var(--space-lg);width:100%;justify-content:center"
+          @click="runTest()" :disabled="testing">
+          <span x-show="!testing">▸ Generate</span>
+          <span x-show="testing">rendering… video may take 1–5 min</span>
         </button>
-        <p x-show="testError" class="text-red-600 text-sm" x-text="testError"></p>
+        <p class="err-text" x-show="testError" x-text="testError"></p>
       </div>
 
-      <!-- 结果区 -->
-      <div class="bg-slate-50 rounded-lg p-4 min-h-[200px]">
+      <!-- 右：输出 -->
+      <div class="pg-result" :class="testing && 'scan-line'">
         <template x-if="!testResult && !testing">
-          <div class="text-slate-400 text-sm text-center pt-8">生成结果会显示在这里</div>
+          <div class="result-empty">
+            <div class="icon">▦</div>
+            <div class="mono" style="font-size:var(--fs-mono-sm);letter-spacing:.1em">SIGNAL OUTPUT</div>
+            <div class="mono" style="font-size:var(--fs-mono-xs);color:var(--text-dim);margin-top:6px">awaiting input</div>
+          </div>
         </template>
+
         <template x-if="testResult">
-          <div class="space-y-3">
+          <div>
             <template x-for="(item, i) in testResult.items" :key="i">
-              <div class="border rounded-lg p-2 bg-white">
+              <div class="result-item">
                 <template x-if="item.mediaType.startsWith('image/')">
-                  <img :src="item.dataUri" class="max-w-full rounded mx-auto" />
+                  <img :src="item.dataUri" alt="generated" />
                 </template>
                 <template x-if="item.mediaType.startsWith('audio/')">
-                  <audio :src="item.dataUri" controls class="w-full"></audio>
+                  <audio :src="item.dataUri" controls></audio>
                 </template>
                 <template x-if="item.mediaType.startsWith('video/')">
-                  <div class="text-sm text-slate-600 break-all">📹 视频已保存：<code x-text="item.localPath"></code></div>
+                  <div class="mono" style="font-size:var(--fs-mono-sm);color:var(--text-secondary);word-break:break-all">
+                    ▸ <span x-text="item.localPath"></span>
+                  </div>
                 </template>
-                <p class="text-xs text-slate-400 mt-1" x-text="item.mediaType"></p>
+                <div class="result-meta" x-text="item.mediaType"></div>
               </div>
             </template>
-            <p class="text-sm text-slate-600 whitespace-pre-line" x-text="testResult.text"></p>
+            <div class="result-summary" x-text="testResult.text"></div>
           </div>
         </template>
       </div>
     </div>
   </section>
 
-  <!-- ============ 接入向导 ============ -->
-  <section x-show="tab==='connect'" class="bg-white rounded-xl shadow-sm border p-5">
-    <h2 class="text-lg font-semibold mb-4">🔌 接入向导</h2>
-    <p class="text-sm text-slate-500 mb-4">先在「配置」页完成 API Key 设置并保存，然后选择你的 agent，复制下方 JSON 粘贴到对应配置文件。</p>
-    <div class="space-y-4">
-      <div>
-        <label class="block text-xs font-medium text-slate-500 mb-1">选择 Agent</label>
-        <select x-model="exportAgent" @change="loadExport()" class="border rounded-lg px-3 py-2 text-sm">
-          <option value="claude">Claude Desktop</option>
-          <option value="cursor">Cursor</option>
-          <option value="cline">Cline (VS Code)</option>
-          <option value="windsurf">Windsurf</option>
-          <option value="generic">通用 stdio</option>
-        </select>
+  <!-- ===== 03 PATCH：接入向导 ===== -->
+  <section x-show="tab==='connect'" class="fade-enter">
+    <div class="patch-panel">
+      <p class="pg-title" style="margin-bottom:var(--space-sm)">◢ Patch Bay</p>
+      <p class="patch-intro">
+        Configure your channels first, then route this console into your agent.
+        Pick a target below and copy the routing snippet.
+      </p>
+
+      <div class="agent-grid">
+        <template x-for="a in agents" :key="a.id">
+          <button class="agent-chip" :class="exportAgent===a.id && 'active'" @click="exportAgent=a.id; loadExport()" x-text="a.label"></button>
+        </template>
       </div>
-      <p x-show="exportData?.note" class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3" x-text="exportData?.note"></p>
-      <div>
-        <div class="flex items-center justify-between mb-1">
-          <label class="text-xs font-medium text-slate-500">配置内容</label>
-          <button @click="copyExport()" class="text-xs text-indigo-600 hover:underline" x-text="copied ? '✓ 已复制' : '📋 复制'"></button>
-        </div>
-        <pre class="bg-slate-900 text-slate-100 rounded-lg p-4 text-xs overflow-x-auto" x-text="exportText"></pre>
+
+      <div class="patch-note" x-show="exportData?.note" x-text="exportData?.note"></div>
+
+      <div class="code-head">
+        <span class="label">mcpServers.json</span>
+        <button class="copy-btn" @click="copyExport()" x-text="copied ? '✓ COPIED' : '⧉ COPY'"></button>
       </div>
+      <pre class="code-block" x-html="highlightedExport"></pre>
     </div>
   </section>
 
-  <footer class="mt-12 text-center text-xs text-slate-400">
-    Duo-MCP · MIT License · 基于多协议多模态生成引擎
+  <!-- ===== 页脚 ===== -->
+  <footer class="foot">
+    <span class="foot-text">DUO-MCP · MIT · multi-modal generation console</span>
+    <div class="foot-dots"><span></span><span></span><span></span></div>
   </footer>
 </div>
 
@@ -223,9 +576,16 @@ function duoApp() {
   return {
     tab: 'config',
     modalities: [
-      { key: 'image', label: '图片', icon: '🖼️' },
-      { key: 'video', label: '视频', icon: '🎬' },
-      { key: 'audio', label: '音频', icon: '🔊' },
+      { key: 'image', no: '01', name: 'IMAGE' },
+      { key: 'video', no: '02', name: 'VIDEO' },
+      { key: 'audio', no: '03', name: 'AUDIO' },
+    ],
+    agents: [
+      { id: 'claude', label: 'Claude Desktop' },
+      { id: 'cursor', label: 'Cursor' },
+      { id: 'cline', label: 'Cline' },
+      { id: 'windsurf', label: 'Windsurf' },
+      { id: 'generic', label: 'Generic stdio' },
     ],
     config: { image: {enabled:false,presetId:'custom',apiKey:''}, video: {enabled:false,presetId:'custom',apiKey:''}, audio: {enabled:false,presetId:'custom',apiKey:''}, outputDir: '' },
     presets: { image: [], video: [], audio: [] },
@@ -236,6 +596,23 @@ function duoApp() {
     testing: false, testResult: null, testError: '',
 
     exportAgent: 'claude', exportData: null, exportText: '', copied: false,
+
+    // JSON 语法高亮：单次分词，回调判断类型，一次生成 HTML
+    get highlightedExport() {
+      if (!this.exportText) return ''
+      const esc = this.exportText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      // 匹配：key（"..."紧跟冒号）、字符串值、数字、标点
+      return esc.replace(
+        /("(?:[^"\\\\]|\\\\.)*")(\\s*:)|("(?:[^"\\\\]|\\\\.)*")|(-?\\d+(?:\\.\\d+)?)|([{}[\\],])/g,
+        (m, key, colon, str, num, punc) => {
+          if (key) return '<span class="tok-key">' + key + '</span>' + colon
+          if (str) return '<span class="tok-str">' + str + '</span>'
+          if (num) return '<span class="tok-num">' + num + '</span>'
+          if (punc) return '<span class="tok-punc">' + punc + '</span>'
+          return m
+        }
+      )
+    },
 
     async init() {
       await Promise.all([this.loadConfig(), this.loadPresets(), this.loadStatus()]);
@@ -258,8 +635,8 @@ function duoApp() {
       try {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || '保存失败');
-        this.config = data.config; this.saveMsg = '✓ 已保存';
+        if (!r.ok) throw new Error(data.error || 'commit failed');
+        this.config = data.config; this.saveMsg = '✓ COMMITTED';
         await this.loadStatus();
       } catch (e) { this.saveErr = true; this.saveMsg = '✗ ' + e.message; }
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
@@ -272,7 +649,7 @@ function duoApp() {
     },
     presetHelp(key) {
       const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);
-      return p ? (p.vendor + ' · ' + p.protocol + (p.helpUrl ? ' · ' + p.helpUrl : '')) : '';
+      return p ? (p.vendor + ' / ' + p.protocol + (p.helpUrl ? ' / ' + p.helpUrl : '')) : '';
     },
     isReady(modality) { return this.status.modalities && this.status.modalities[modality]; },
     async runTest() {
@@ -281,7 +658,7 @@ function duoApp() {
         const body = { modality: this.test.modality, prompt: this.test.prompt, apiKey: this.test.tempKey || undefined, size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined };
         const r = await fetch('/api/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || '生成失败');
+        if (!r.ok) throw new Error(data.error || 'generation failed');
         this.testResult = data;
       } catch (e) { this.testError = e.message; }
       finally { this.testing = false; }
@@ -293,7 +670,7 @@ function duoApp() {
     },
     async copyExport() {
       try { await navigator.clipboard.writeText(this.exportText); this.copied = true; setTimeout(() => this.copied = false, 2000); }
-      catch (e) { /* fallback */ const ta = document.createElement('textarea'); ta.value = this.exportText; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); this.copied = true; setTimeout(() => this.copied = false, 2000); }
+      catch (e) { const ta = document.createElement('textarea'); ta.value = this.exportText; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); this.copied = true; setTimeout(() => this.copied = false, 2000); }
     },
   };
 }
