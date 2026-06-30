@@ -21,55 +21,101 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>DUO-MCP · Multi-Modal Generation Console</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script>
+// 防闪烁：Alpine 加载前先应用持久化的主题与语言（中文为默认）
+(function(){
+  try {
+    var theme = localStorage.getItem('duo-theme') || 'dark';
+    var lang = localStorage.getItem('duo-lang') || 'zh';
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en');
+  } catch(e) { document.documentElement.setAttribute('data-theme','dark'); }
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-/* ===== 设计令牌：Industrial Studio Console ===== */
-:root{
-  /* 表面层：深色暖调，逐层抬升 */
+/* ===== 设计令牌：Industrial Studio Console（双主题） ===== */
+/* dark：深色暖调控制台（默认） */
+[data-theme="dark"]{
   --surface-0:#0c0d0a;            /* 最底（页面背景） */
-  --surface-1:#14161100;          /* 留作透明叠加占位 */
+  --surface-1:rgba(20,22,17,0);   /* 透明叠加占位 */
   --surface-2:#1a1c16;            /* 卡片底 */
   --surface-3:#232520;            /* 抬升面板 */
   --surface-4:#2d3028;            /* 输入/高亮面 */
 
-  /* 文本 */
   --text-primary:#ecebe1;         /* 主文字，暖白 */
-  --text-secondary:#b8b8a8;       /* 次文字（提亮，改善对比度） */
+  --text-secondary:#b8b8a8;       /* 次文字 */
   --text-muted:#7a7b6c;           /* 标签/弱化 */
   --text-dim:#494a41;             /* 最弱 */
 
-  /* 信号色 */
-  --signal:#c4f542;               /* acid lime · 就绪/运行/主强调 */
+  --signal:#c4f542;               /* acid lime · 主强调 */
   --signal-dim:#7a9426;
   --signal-glow:rgba(196,245,66,.35);
+  --signal-contrast:#0c0d0a;      /* 信号色背景上的文字色 */
 
-  /* 反馈 */
   --warn:#f5a142;
   --error:#f55d5d;
   --info:#5fb8f5;
 
-  /* 线条 */
   --line:#2f3128;
   --line-bright:#42453a;
 
-  /* 间距尺度 */
+  /* 代码块专属（深色更暗） */
+  --code-bg:#0a0b08;
+  --code-text:#c8c8b8;
+  --grid-opacity:.25;
+  --noise-opacity:.04;
+  --shadow-md:0 8px 24px -12px rgba(0,0,0,.6), 0 1px 0 var(--line) inset;
+  --shadow-lg:0 20px 50px -20px rgba(0,0,0,.8), 0 1px 0 var(--line-bright) inset;
+}
+
+/* light：暖白纸质工业风（克制仪器感，非通用亮色） */
+[data-theme="light"]{
+  --surface-0:#f3f1ea;            /* 暖白纸张底 */
+  --surface-1:rgba(255,255,255,0);
+  --surface-2:#ffffff;            /* 卡片：纯白抬升 */
+  --surface-3:#faf8f1;            /* 面板：略带暖意 */
+  --surface-4:#efede4;            /* 输入/高亮面 */
+
+  --text-primary:#1c1d18;         /* 主文字：深墨暖黑 */
+  --text-secondary:#54544a;       /* 次文字 */
+  --text-muted:#86867a;           /* 标签 */
+  --text-dim:#b0b0a4;             /* 最弱 */
+
+  /* 信号色在亮底上加深，保证对比度（WCAG） */
+  --signal:#5d7a14;               /* 深橄榄绿 acid */
+  --signal-dim:#8aa82e;
+  --signal-glow:rgba(93,122,20,.18);
+  --signal-contrast:#ffffff;
+
+  --warn:#b5610a;
+  --error:#c63838;
+  --info:#2a7ab8;
+
+  --line:#e2dfd2;
+  --line-bright:#cfccbe;
+
+  --code-bg:#fbfaf3;
+  --code-text:#3a3a30;
+  --grid-opacity:.5;
+  --noise-opacity:.025;
+  --shadow-md:0 8px 24px -14px rgba(60,55,40,.18), 0 1px 0 var(--line) inset;
+  --shadow-lg:0 20px 50px -22px rgba(60,55,40,.22), 0 1px 0 var(--line-bright) inset;
+}
+
+:root{
+  /* 间距/字号/圆角等与主题无关的尺度（共享） */
   --space-xs:.375rem; --space-sm:.625rem; --space-md:1rem;
   --space-lg:1.75rem; --space-xl:3rem; --space-2xl:5rem;
 
-  /* 字号 */
   --fs-mono-xs:.6875rem; --fs-mono-sm:.75rem; --fs-mono-md:.8125rem;
   --fs-display-xl:clamp(2rem,5vw,3.25rem);
   --fs-display-lg:clamp(1.5rem,3vw,2.125rem);
   --fs-body:.9375rem;
 
-  /* 阴影：分层、低扩散，工业感 */
-  --shadow-sm:0 1px 0 var(--line);
-  --shadow-md:0 8px 24px -12px rgba(0,0,0,.6), 0 1px 0 var(--line) inset;
-  --shadow-lg:0 20px 50px -20px rgba(0,0,0,.8), 0 1px 0 var(--line-bright) inset;
-
-  --radius:2px;                    /* 接近直角，仪器感 */
+  --radius:2px;
   --radius-lg:3px;
 }
 
@@ -92,14 +138,14 @@ body::before{
     linear-gradient(var(--line) 1px,transparent 1px),
     linear-gradient(90deg,var(--line) 1px,transparent 1px);
   background-size:64px 64px;
-  opacity:.25;
+  opacity:var(--grid-opacity);
   mask-image:radial-gradient(ellipse at top,#000 0%,transparent 75%);
 }
 /* 噪点叠加 */
 body::after{
   content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9 0 0 0 0 .9 0 0 0 0 .85 0 0 0 .5 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
-  opacity:.04;
+  opacity:var(--noise-opacity);
 }
 
 .mono{font-family:'JetBrains Mono',monospace;font-feature-settings:"ss01","ss02"}
@@ -121,6 +167,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--signal);
 input::placeholder,textarea::placeholder{color:var(--text-dim)}
 select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%23a8a89a' d='M2 4l4 4 4-4'/></svg>");
   background-repeat:no-repeat;background-position:right var(--space-md) center;padding-right:2.25rem}
+[data-theme="light"] select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%2386867a' d='M2 4l4 4 4-4'/></svg>")}
 textarea{resize:vertical;line-height:1.6}
 
 /* 按钮 */
@@ -132,8 +179,8 @@ textarea{resize:vertical;line-height:1.6}
   color:var(--text-primary);cursor:pointer;transition:all .15s;
 }
 .btn:hover{border-color:var(--signal);color:var(--signal)}
-.btn-primary{background:var(--signal);color:#0c0d0a;border-color:var(--signal)}
-.btn-primary:hover{background:#d4ff52;color:#0c0d0a;box-shadow:0 0 24px var(--signal-glow)}
+.btn-primary{background:var(--signal);color:var(--signal-contrast);border-color:var(--signal)}
+.btn-primary:hover{filter:brightness(1.08);box-shadow:0 0 24px var(--signal-glow)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .btn:disabled:hover{border-color:var(--line-bright);color:var(--text-primary);box-shadow:none;background:var(--surface-3)}
 
@@ -196,7 +243,7 @@ textarea{resize:vertical;line-height:1.6}
   width:8px;height:8px;border-radius:50%;background:var(--text-dim);
   position:relative;transition:background .2s;
 }
-.channel.live .ch-led{background:var(--signal);box-shadow:0 0 0 3px rgba(196,245,66,.15)}
+.channel.live .ch-led{background:var(--signal);box-shadow:0 0 0 3px var(--signal-glow)}
 /* 信号灯呼吸（仅 live 通道） */
 .channel.live .ch-led::after{
   content:"";position:absolute;inset:-4px;border-radius:50%;
@@ -213,7 +260,7 @@ textarea{resize:vertical;line-height:1.6}
   letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);
   padding:2px 8px;border:1px solid var(--line);border-radius:var(--radius);
 }
-.channel.live .ch-status{color:var(--signal);border-color:var(--signal-dim);background:rgba(196,245,66,.06)}
+.channel.live .ch-status{color:var(--signal);border-color:var(--signal-dim);background:var(--signal-glow)}
 
 .ch-field{margin-bottom:var(--space-md)}
 .ch-field:last-child{margin-bottom:0}
@@ -232,7 +279,7 @@ textarea{resize:vertical;line-height:1.6}
   content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:50%;
   background:var(--text-muted);transition:all .2s;
 }
-.toggle input:checked + .toggle-track{background:rgba(196,245,66,.15);border-color:var(--signal-dim)}
+.toggle input:checked + .toggle-track{background:var(--signal-glow);border-color:var(--signal-dim)}
 .toggle input:checked + .toggle-track::after{transform:translateX(18px);background:var(--signal)}
 .toggle-label{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary)}
 
@@ -259,7 +306,7 @@ textarea{resize:vertical;line-height:1.6}
   cursor:pointer;transition:all .15s;border-right:1px solid var(--line);
 }
 .modality-switch button:last-child{border-right:none}
-.modality-switch button.active{background:var(--signal);color:#0c0d0a}
+.modality-switch button.active{background:var(--signal);color:var(--signal-contrast)}
 .modality-switch button:hover:not(.active){color:var(--text-secondary);background:var(--surface-4)}
 
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);margin-top:var(--space-md)}
@@ -308,8 +355,8 @@ textarea{resize:vertical;line-height:1.6}
   margin-top:var(--space-md);margin-bottom:var(--space-lg);line-height:1.6}
 
 .code-block{
-  background:#0a0b08;border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-lg);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:#c8c8b8;
+  background:var(--code-bg);border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-lg);
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:var(--code-text);
   overflow-x:auto;line-height:1.8;white-space:pre;
 }
 /* JSON 语法着色 */
@@ -321,7 +368,7 @@ textarea{resize:vertical;line-height:1.6}
 .copy-btn{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--signal);
   background:var(--surface-3);border:1px solid var(--signal-dim);border-radius:var(--radius);
   cursor:pointer;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;transition:all .15s}
-.copy-btn:hover{background:rgba(196,245,66,.12);border-color:var(--signal)}
+.copy-btn:hover{background:var(--signal-glow);border-color:var(--signal)}
 
 /* ===== 页脚 ===== */
 .foot{
@@ -332,6 +379,35 @@ textarea{resize:vertical;line-height:1.6}
 .foot-dots{display:flex;gap:6px}
 .foot-dots span{width:6px;height:6px;border-radius:50%;background:var(--text-dim)}
 .foot-dots span:first-child{background:var(--signal)}
+
+/* 主题切换平滑：让所有颜色属性在切换时过渡 */
+html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code-block,
+.btn,.agent-chip,.nav-tab,.modality-switch button{
+  transition:background-color .25s ease,border-color .25s ease,color .25s ease;
+}
+
+/* ===== 顶栏控件：主题 + 语言切换 ===== */
+.head-controls{display:flex;align-items:center;gap:var(--space-sm)}
+.toggle-group{
+  display:inline-flex;border:1px solid var(--line-bright);border-radius:var(--radius);overflow:hidden;
+  background:var(--surface-3);
+}
+.toggle-group button{
+  background:none;border:none;cursor:pointer;padding:5px 10px;
+  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:600;
+  letter-spacing:.06em;color:var(--text-muted);transition:all .15s;
+  border-right:1px solid var(--line);
+}
+.toggle-group button:last-child{border-right:none}
+.toggle-group button.active{background:var(--signal);color:var(--signal-contrast)}
+.toggle-group button:hover:not(.active){color:var(--text-secondary);background:var(--surface-4)}
+.icon-btn{
+  background:var(--surface-3);border:1px solid var(--line-bright);border-radius:var(--radius);
+  width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+  cursor:pointer;color:var(--text-secondary);transition:all .15s;
+  font-size:14px;line-height:1;
+}
+.icon-btn:hover{border-color:var(--signal-dim);color:var(--signal)}
 
 /* 进入动画 */
 [x-cloak]{display:none!important}
@@ -352,24 +428,34 @@ textarea{resize:vertical;line-height:1.6}
   <header class="console-head">
     <div class="brand-mark">
       <div class="brand-logo">DUO<span class="dot">·</span>MCP</div>
-      <span class="brand-tag">// multi-modal generation console</span>
+      <span class="brand-tag" x-text="t.brandTag"></span>
     </div>
-    <div class="device-id">
-      <div>UNIT <code x-text="status.configPath ? status.configPath.split('/').slice(-2).join('/') : '~/.duo-mcp'"></code></div>
-      <div>OUT <code x-text="status.outputDir ? status.outputDir.split('/').slice(-2).join('/') : 'generated-media'"></code></div>
+    <div class="head-controls">
+      <!-- 语言切换 -->
+      <div class="toggle-group" role="group" :aria-label="t.langLabel">
+        <button :class="lang==='zh' && 'active'" @click="setLang('zh')" aria-label="中文">中</button>
+        <button :class="lang==='en' && 'active'" @click="setLang('en')" aria-label="English">EN</button>
+      </div>
+      <!-- 主题切换 -->
+      <button class="icon-btn" @click="toggleTheme()" :aria-label="t.themeLabel"
+        :title="t.themeLabel" x-text="theme==='dark' ? '☀' : '☾'"></button>
+      <div class="device-id">
+        <div>UNIT <code x-text="status.configPath ? status.configPath.split('/').slice(-2).join('/') : '~/.duo-mcp'"></code></div>
+        <div>OUT <code x-text="status.outputDir ? status.outputDir.split('/').slice(-2).join('/') : 'generated-media'"></code></div>
+      </div>
     </div>
   </header>
 
   <!-- ===== 导航 ===== -->
   <nav class="nav-bar">
     <button class="nav-tab" :class="tab==='config' && 'active'" @click="tab='config'">
-      <span class="nav-led"></span><span class="idx">01</span> Channels
+      <span class="nav-led"></span><span class="idx">01</span> <span x-text="t.navChannels"></span>
     </button>
     <button class="nav-tab" :class="tab==='playground' && 'active'" @click="tab='playground'">
-      <span class="nav-led"></span><span class="idx">02</span> Playground
+      <span class="nav-led"></span><span class="idx">02</span> <span x-text="t.navPlayground"></span>
     </button>
     <button class="nav-tab" :class="tab==='connect' && 'active'" @click="tab='connect'">
-      <span class="nav-led"></span><span class="idx">03</span> Patch
+      <span class="nav-led"></span><span class="idx">03</span> <span x-text="t.navPatch"></span>
     </button>
   </nav>
 
@@ -384,21 +470,21 @@ textarea{resize:vertical;line-height:1.6}
               <span class="ch-no mono" x-text="'CH ' + m.no"></span>
               <span class="ch-name" x-text="m.name"></span>
             </div>
-            <span class="ch-status" x-text="(config[m.key]?.enabled && config[m.key]?.apiKey) ? 'LIVE' : 'IDLE'"></span>
+            <span class="ch-status" x-text="(config[m.key]?.enabled && config[m.key]?.apiKey) ? t.statusLive : t.statusIdle"></span>
           </div>
 
           <div class="ch-field">
             <label class="toggle">
               <input type="checkbox" x-model="config[m.key].enabled" />
               <span class="toggle-track"></span>
-              <span class="toggle-label" x-text="config[m.key]?.enabled ? 'ENGAGED' : 'BYPASSED'"></span>
+              <span class="toggle-label" x-text="config[m.key]?.enabled ? t.engaged : t.bypassed"></span>
             </label>
           </div>
 
           <div class="ch-field">
-            <span class="label">Signal Source / Preset</span>
+            <span class="label" x-text="t.labelPreset"></span>
             <select x-model="config[m.key].presetId" @change="onPresetChange(m.key)">
-              <option value="custom">// custom routing</option>
+              <option value="custom" x-text="t.customRouting"></option>
               <template x-for="p in (presets[m.key] || [])" :key="p.id">
                 <option :value="p.id" x-text="p.model + ' · ' + p.vendor"></option>
               </template>
@@ -407,17 +493,17 @@ textarea{resize:vertical;line-height:1.6}
           </div>
 
           <div class="ch-field">
-            <span class="label">API Key</span>
+            <span class="label" x-text="t.labelApiKey"></span>
             <input type="password" x-model="config[m.key].apiKey"
-              :placeholder="config[m.key]?.apiKey?.includes('****') ? 'stored · retype to overwrite' : 'paste key here'" />
+              :placeholder="config[m.key]?.apiKey?.includes('****') ? t.phKeyStored : t.phKeyPaste" />
           </div>
 
           <template x-if="config[m.key].presetId === 'custom'">
             <div class="ch-field">
-              <span class="label">Model / Protocol / BaseURL</span>
-              <input type="text" x-model="config[m.key].model" placeholder="model-id" style="margin-bottom:6px" />
-              <input type="text" x-model="config[m.key].protocol" placeholder="protocol (e.g. openai-images)" style="margin-bottom:6px" />
-              <input type="text" x-model="config[m.key].baseUrl" placeholder="base url (optional)" />
+              <span class="label" x-text="t.labelModelProto"></span>
+              <input type="text" x-model="config[m.key].model" :placeholder="t.phModel" style="margin-bottom:6px" />
+              <input type="text" x-model="config[m.key].protocol" :placeholder="t.phProtocol" style="margin-bottom:6px" />
+              <input type="text" x-model="config[m.key].baseUrl" :placeholder="t.phBaseUrl" />
             </div>
           </template>
         </div>
@@ -427,13 +513,13 @@ textarea{resize:vertical;line-height:1.6}
     <!-- 主输出 + 保存 -->
     <div class="master-section">
       <div class="ch-field" style="margin:0">
-        <span class="label">Master Output Directory</span>
-        <input type="text" x-model="config.outputDir" placeholder="blank = ~/.duo-mcp/generated-media" />
+        <span class="label" x-text="t.labelOutputDir"></span>
+        <input type="text" x-model="config.outputDir" :placeholder="t.phOutputDir" />
       </div>
       <div class="save-bar">
         <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">
-          <span x-show="!saving">▸ Commit Config</span>
-          <span x-show="saving">committing…</span>
+          <span x-show="!saving" x-text="t.btnCommit"></span>
+          <span x-show="saving" x-text="t.btnCommitting"></span>
         </button>
         <span class="save-msg" :class="saveErr ? 'err' : 'ok'" x-show="saveMsg" x-text="saveMsg"></span>
       </div>
@@ -446,7 +532,7 @@ textarea{resize:vertical;line-height:1.6}
       <!-- 左：控制 -->
       <div class="pg-panel">
         <div class="pg-head">
-          <span class="pg-title">◢ Signal Generator</span>
+          <span class="pg-title" x-text="t.pgTitle"></span>
         </div>
 
         <div class="modality-switch">
@@ -456,50 +542,49 @@ textarea{resize:vertical;line-height:1.6}
         </div>
 
         <div style="margin-top:var(--space-md)">
-          <span class="label">Prompt <span x-show="test.modality==='audio'">/ Text</span></span>
-          <textarea x-model="test.prompt" rows="4" placeholder="describe what to generate…"></textarea>
+          <span class="label"><span x-text="t.labelPrompt"></span> <span x-show="test.modality==='audio'" x-text="t.promptSuffix"></span></span>
+          <textarea x-model="test.prompt" rows="4" :placeholder="t.phPrompt"></textarea>
         </div>
 
         <div class="field-row">
           <div x-show="test.modality==='image'">
-            <span class="label">Count</span>
+            <span class="label" x-text="t.labelCount"></span>
             <input type="number" min="1" max="4" x-model.number="test.numberOfImages" />
           </div>
           <div x-show="test.modality==='image'">
-            <span class="label">Size</span>
+            <span class="label" x-text="t.labelSize"></span>
             <input type="text" x-model="test.size" placeholder="1024x1024" />
           </div>
           <div x-show="test.modality==='video'">
-            <span class="label">Duration (s)</span>
+            <span class="label" x-text="t.labelDuration"></span>
             <input type="number" min="1" max="60" x-model.number="test.duration" />
           </div>
           <div x-show="test.modality==='audio'">
-            <span class="label">Task</span>
+            <span class="label" x-text="t.labelTask"></span>
             <select x-model="test.task">
-              <option value="tts">tts · speech</option>
-              <option value="music">music</option>
-              <option value="clone">clone</option>
+              <option value="tts" x-text="t.taskTts"></option>
+              <option value="music" x-text="t.taskMusic"></option>
+              <option value="clone" x-text="t.taskClone"></option>
             </select>
           </div>
           <div x-show="test.modality==='audio' && test.task==='tts'">
-            <span class="label">Voice</span>
-            <input type="text" x-model="test.voice" placeholder="e.g. Cherry" />
+            <span class="label" x-text="t.labelVoice"></span>
+            <input type="text" x-model="test.voice" :placeholder="t.phVoice" />
           </div>
         </div>
 
-        <div class="warn-banner" x-show="test.modality && !isReady(test.modality)">
-          ⚠ CHANNEL NOT LIVE — this modality has no stored key. Set it in Channels, or paste a key below for one-shot testing.
+        <div class="warn-banner" x-show="test.modality && !isReady(test.modality)" x-text="t.warnNotLive">
         </div>
 
         <div style="margin-top:var(--space-lg)">
-          <span class="label">Temp Key <span style="text-transform:none;color:var(--text-dim)">(one-shot, not stored)</span></span>
-          <input type="password" x-model="test.tempKey" placeholder="blank = use stored key" />
+          <span class="label"><span x-text="t.labelTempKey"></span> <span style="text-transform:none;color:var(--text-dim)" x-text="t.tempKeyHint"></span></span>
+          <input type="password" x-model="test.tempKey" :placeholder="t.phTempKey" />
         </div>
 
         <button class="btn btn-primary" style="margin-top:var(--space-lg);width:100%;justify-content:center"
           @click="runTest()" :disabled="testing">
-          <span x-show="!testing">▸ Generate</span>
-          <span x-show="testing">rendering… video may take 1–5 min</span>
+          <span x-show="!testing" x-text="t.btnGenerate"></span>
+          <span x-show="testing" x-text="t.btnGenerating"></span>
         </button>
         <p class="err-text" x-show="testError" x-text="testError"></p>
       </div>
@@ -509,8 +594,8 @@ textarea{resize:vertical;line-height:1.6}
         <template x-if="!testResult && !testing">
           <div class="result-empty">
             <div class="icon">▦</div>
-            <div class="mono" style="font-size:var(--fs-mono-sm);letter-spacing:.1em">SIGNAL OUTPUT</div>
-            <div class="mono" style="font-size:var(--fs-mono-xs);color:var(--text-dim);margin-top:6px">awaiting input</div>
+            <div class="mono" style="font-size:var(--fs-mono-sm);letter-spacing:.1em" x-text="t.signalOutput"></div>
+            <div class="mono" style="font-size:var(--fs-mono-xs);color:var(--text-dim);margin-top:6px" x-text="t.awaitingInput"></div>
           </div>
         </template>
 
@@ -542,11 +627,8 @@ textarea{resize:vertical;line-height:1.6}
   <!-- ===== 03 PATCH：接入向导 ===== -->
   <section x-show="tab==='connect'" class="fade-enter">
     <div class="patch-panel">
-      <p class="pg-title" style="margin-bottom:var(--space-sm)">◢ Patch Bay</p>
-      <p class="patch-intro">
-        Configure your channels first, then route this console into your agent.
-        Pick a target below and copy the routing snippet.
-      </p>
+      <p class="pg-title" style="margin-bottom:var(--space-sm)" x-text="t.patchTitle"></p>
+      <p class="patch-intro" x-text="t.patchIntro"></p>
 
       <div class="agent-grid">
         <template x-for="a in agents" :key="a.id">
@@ -557,8 +639,8 @@ textarea{resize:vertical;line-height:1.6}
       <div class="patch-note" x-show="exportData?.note" x-text="exportData?.note"></div>
 
       <div class="code-head">
-        <span class="label">mcpServers.json</span>
-        <button class="copy-btn" @click="copyExport()" x-text="copied ? '✓ COPIED' : '⧉ COPY'"></button>
+        <span class="label" x-text="t.configSnippet"></span>
+        <button class="copy-btn" @click="copyExport()" x-text="copied ? t.copied : t.copy"></button>
       </div>
       <pre class="code-block" x-html="highlightedExport"></pre>
     </div>
@@ -566,7 +648,7 @@ textarea{resize:vertical;line-height:1.6}
 
   <!-- ===== 页脚 ===== -->
   <footer class="foot">
-    <span class="foot-text">DUO-MCP · MIT · multi-modal generation console</span>
+    <span class="foot-text" x-text="t.footer"></span>
     <div class="foot-dots"><span></span><span></span><span></span></div>
   </footer>
 </div>
@@ -575,17 +657,92 @@ textarea{resize:vertical;line-height:1.6}
 function duoApp() {
   return {
     tab: 'config',
+    // ===== 主题与语言（持久化，默认 dark + 中文） =====
+    theme: localStorage.getItem('duo-theme') || 'dark',
+    lang: localStorage.getItem('duo-lang') || 'zh',
+
+    // ===== i18n 文案字典 =====
+    dict: {
+      zh: {
+        brandTag: '// 多模态生成控制台',
+        langLabel: '语言', themeLabel: '切换主题',
+        navChannels: '通道', navPlayground: '试用台', navPatch: '接入',
+        statusLive: '就绪', statusIdle: '空闲',
+        engaged: '已启用', bypassed: '已旁路',
+        labelPreset: '信号源 / 预设', customRouting: '// 自定义路由',
+        labelApiKey: 'API 密钥',
+        phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
+        labelModelProto: '模型 / 协议 / BaseURL',
+        phModel: '模型 ID', phProtocol: '协议（如 openai-images）', phBaseUrl: 'base url（可选）',
+        labelOutputDir: '主输出目录',
+        phOutputDir: '留空 = ~/.duo-mcp/generated-media',
+        btnCommit: '▸ 提交配置', btnCommitting: '提交中…',
+        committed: '✓ 已提交', commitFailed: '提交失败',
+        pgTitle: '◢ 信号发生器',
+        labelPrompt: '提示词', promptSuffix: '/ 文本', phPrompt: '描述要生成的内容…',
+        labelCount: '数量', labelSize: '尺寸', labelDuration: '时长（秒）',
+        labelTask: '任务', taskTts: 'tts · 语音', taskMusic: '音乐', taskClone: '克隆',
+        labelVoice: '音色', phVoice: '如 Cherry',
+        warnNotLive: '⚠ 通道未就绪 — 该模态尚未保存密钥。请到「通道」配置，或在下方临时填入密钥进行一次性测试。',
+        labelTempKey: '临时密钥', tempKeyHint: '（一次性，不保存）', phTempKey: '留空 = 使用已保存密钥',
+        btnGenerate: '▸ 生成', btnGenerating: '生成中… 视频可能需要 1–5 分钟',
+        generationFailed: '生成失败',
+        signalOutput: '信号输出', awaitingInput: '等待输入',
+        patchTitle: '◢ 接线盘',
+        patchIntro: '请先在「通道」配置好各模态，再将本控制台接入你的 agent。选择下方目标并复制配置片段。',
+        configSnippet: 'mcpServers.json', copy: '⧉ 复制', copied: '✓ 已复制',
+        footer: 'DUO-MCP · MIT · 多模态生成控制台',
+        agents: { claude:'Claude Desktop', cursor:'Cursor', cline:'Cline', windsurf:'Windsurf', generic:'通用 stdio' },
+      },
+      en: {
+        brandTag: '// multi-modal generation console',
+        langLabel: 'Language', themeLabel: 'Toggle theme',
+        navChannels: 'Channels', navPlayground: 'Playground', navPatch: 'Patch',
+        statusLive: 'LIVE', statusIdle: 'IDLE',
+        engaged: 'ENGAGED', bypassed: 'BYPASSED',
+        labelPreset: 'Signal Source / Preset', customRouting: '// custom routing',
+        labelApiKey: 'API Key',
+        phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
+        labelModelProto: 'Model / Protocol / BaseURL',
+        phModel: 'model-id', phProtocol: 'protocol (e.g. openai-images)', phBaseUrl: 'base url (optional)',
+        labelOutputDir: 'Master Output Directory',
+        phOutputDir: 'blank = ~/.duo-mcp/generated-media',
+        btnCommit: '▸ Commit Config', btnCommitting: 'committing…',
+        committed: '✓ COMMITTED', commitFailed: 'commit failed',
+        pgTitle: '◢ Signal Generator',
+        labelPrompt: 'Prompt', promptSuffix: '/ Text', phPrompt: 'describe what to generate…',
+        labelCount: 'Count', labelSize: 'Size', labelDuration: 'Duration (s)',
+        labelTask: 'Task', taskTts: 'tts · speech', taskMusic: 'music', taskClone: 'clone',
+        labelVoice: 'Voice', phVoice: 'e.g. Cherry',
+        warnNotLive: '⚠ CHANNEL NOT LIVE — this modality has no stored key. Set it in Channels, or paste a key below for one-shot testing.',
+        labelTempKey: 'Temp Key', tempKeyHint: '(one-shot, not stored)', phTempKey: 'blank = use stored key',
+        btnGenerate: '▸ Generate', btnGenerating: 'rendering… video may take 1–5 min',
+        generationFailed: 'generation failed',
+        signalOutput: 'SIGNAL OUTPUT', awaitingInput: 'awaiting input',
+        patchTitle: '◢ Patch Bay',
+        patchIntro: 'Configure your channels first, then route this console into your agent. Pick a target below and copy the routing snippet.',
+        configSnippet: 'mcpServers.json', copy: '⧉ COPY', copied: '✓ COPIED',
+        footer: 'DUO-MCP · MIT · multi-modal generation console',
+        agents: { claude:'Claude Desktop', cursor:'Cursor', cline:'Cline', windsurf:'Windsurf', generic:'Generic stdio' },
+      },
+    },
+
+    // 当前语言文案（getter，随 lang 变化）
+    get t() { return this.dict[this.lang] || this.dict.zh; },
+    // agent 列表（label 取当前语言）
+    get agents() {
+      const a = this.t.agents;
+      return [
+        { id: 'claude', label: a.claude }, { id: 'cursor', label: a.cursor },
+        { id: 'cline', label: a.cline }, { id: 'windsurf', label: a.windsurf },
+        { id: 'generic', label: a.generic },
+      ];
+    },
+
     modalities: [
       { key: 'image', no: '01', name: 'IMAGE' },
       { key: 'video', no: '02', name: 'VIDEO' },
       { key: 'audio', no: '03', name: 'AUDIO' },
-    ],
-    agents: [
-      { id: 'claude', label: 'Claude Desktop' },
-      { id: 'cursor', label: 'Cursor' },
-      { id: 'cline', label: 'Cline' },
-      { id: 'windsurf', label: 'Windsurf' },
-      { id: 'generic', label: 'Generic stdio' },
     ],
     config: { image: {enabled:false,presetId:'custom',apiKey:''}, video: {enabled:false,presetId:'custom',apiKey:''}, audio: {enabled:false,presetId:'custom',apiKey:''}, outputDir: '' },
     presets: { image: [], video: [], audio: [] },
@@ -597,11 +754,25 @@ function duoApp() {
 
     exportAgent: 'claude', exportData: null, exportText: '', copied: false,
 
+    // ===== 主题与语言切换 =====
+    setLang(l) {
+      this.lang = l;
+      try { localStorage.setItem('duo-lang', l); } catch(e){}
+      document.documentElement.setAttribute('lang', l === 'zh' ? 'zh-CN' : 'en');
+    },
+    toggleTheme() {
+      this.theme = this.theme === 'dark' ? 'light' : 'dark';
+      this.applyTheme();
+    },
+    applyTheme() {
+      document.documentElement.setAttribute('data-theme', this.theme);
+      try { localStorage.setItem('duo-theme', this.theme); } catch(e){}
+    },
+
     // JSON 语法高亮：单次分词，回调判断类型，一次生成 HTML
     get highlightedExport() {
       if (!this.exportText) return ''
       const esc = this.exportText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      // 匹配：key（"..."紧跟冒号）、字符串值、数字、标点
       return esc.replace(
         /("(?:[^"\\\\]|\\\\.)*")(\\s*:)|("(?:[^"\\\\]|\\\\.)*")|(-?\\d+(?:\\.\\d+)?)|([{}[\\],])/g,
         (m, key, colon, str, num, punc) => {
@@ -615,6 +786,7 @@ function duoApp() {
     },
 
     async init() {
+      this.applyTheme();
       await Promise.all([this.loadConfig(), this.loadPresets(), this.loadStatus()]);
       this.loadExport();
     },
@@ -635,8 +807,8 @@ function duoApp() {
       try {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'commit failed');
-        this.config = data.config; this.saveMsg = '✓ COMMITTED';
+        if (!r.ok) throw new Error(data.error || this.t.commitFailed);
+        this.config = data.config; this.saveMsg = this.t.committed;
         await this.loadStatus();
       } catch (e) { this.saveErr = true; this.saveMsg = '✗ ' + e.message; }
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
@@ -658,7 +830,7 @@ function duoApp() {
         const body = { modality: this.test.modality, prompt: this.test.prompt, apiKey: this.test.tempKey || undefined, size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined };
         const r = await fetch('/api/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'generation failed');
+        if (!r.ok) throw new Error(data.error || this.t.generationFailed);
         this.testResult = data;
       } catch (e) { this.testError = e.message; }
       finally { this.testing = false; }
