@@ -908,6 +908,9 @@ export interface GenerateMediaInput {
   outputCompression?: number
   background?: OpenAiImageBackground
   moderation?: OpenAiImageModeration
+  /** Gemini（nano-banana）专属参数（仅 gemini-generate-content 协议族使用） */
+  aspectRatio?: '1:1' | '16:9' | '4:3' | '9:16' | '3:4'
+  imageSize?: 'auto' | '1K' | '2K' | '4K'
   /** 跨厂商常用高级参数（各协议族按官方字段选择性透传） */
   negativePrompt?: string
   seed?: number
@@ -1400,12 +1403,14 @@ function geminiHistoryHasSignature(history: GeminiContent[]): boolean {
 /**
  * 构建 Gemini generateContent 请求体。
  * 参考图作为 user message 前导 parts（inlineData base64），prompt 作为 text part。
+ * imageConfig 仅在非默认值（aspectRatio≠1:1 或 imageSize≠auto）时附加。
  */
 function buildGeminiRequest(
   prompt: string,
   referenceImageParts: GeminiPart[],
   history: GeminiContent[],
   aspectRatio?: string,
+  imageSize?: string,
 ): Record<string, unknown> {
   const needsSignature = history.length > 0 && geminiHistoryHasSignature(history)
   const userParts: GeminiPart[] = [
@@ -1413,9 +1418,15 @@ function buildGeminiRequest(
     { text: prompt, ...(needsSignature && { thoughtSignature: GEMINI_DUMMY_SIGNATURE }) },
   ]
   const generationConfig: Record<string, unknown> = { responseModalities: ['TEXT', 'IMAGE'] }
-  // imageConfig 仅在非默认 aspectRatio（1:1）时附加
+  const imageConfig: Record<string, unknown> = {}
   if (aspectRatio && aspectRatio !== '1:1') {
-    generationConfig.imageConfig = { aspectRatio }
+    imageConfig.aspectRatio = aspectRatio
+  }
+  if (imageSize && imageSize !== 'auto') {
+    imageConfig.imageSize = imageSize
+  }
+  if (Object.keys(imageConfig).length > 0) {
+    generationConfig.imageConfig = imageConfig
   }
   return {
     contents: [...history, { role: 'user', parts: userParts }],
@@ -1448,10 +1459,10 @@ async function callGeminiImageApi(
     inlineData: { mimeType: r.mediaType, data: r.base64 },
   }))
 
-  // 宽高比：size 字段（如 '16:9'）或专门的 aspectRatio
-  const aspectRatio = input.size?.trim() || undefined
+  // 宽高比：优先 Gemini 专属 aspectRatio，回退到通用 size（如 '16:9'）
+  const aspectRatio = input.aspectRatio?.trim() || input.size?.trim() || undefined
 
-  const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio)
+  const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, input.imageSize)
   const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`
 
   const response = await fetchFn(url, {

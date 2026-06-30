@@ -112,6 +112,8 @@ const IMAGE_SCHEMA: Record<string, unknown> = {
     watermark: { type: 'boolean', description: 'Enable/disable watermark where supported.' },
     stylePreset: { type: 'string', description: 'Stability AI style preset where supported.' },
     guidanceScale: { type: 'number', description: 'CFG/guidance scale where supported.' },
+    aspectRatio: { type: 'string', enum: ['1:1', '16:9', '4:3', '9:16', '3:4'], description: 'Gemini only: output aspect ratio (default 1:1).' },
+    imageSize: { type: 'string', enum: ['auto', '1K', '2K', '4K'], description: 'Gemini only: output resolution (default auto).' },
   },
   required: ['prompt'],
 }
@@ -185,8 +187,18 @@ export function resolveModality(config: DuoConfig, modality: MediaModality): Res
 
 // ===== 描述文本构造 =====
 
-function buildImageDescription(): string {
-  return 'Generate or edit images using AI. Supports multiple mainstream models (OpenAI gpt-image, Doubao Seedream, Zhipu GLM-Image/CogView, MiniMax, Tongyi Wanx, Qwen-Image). Supports text-to-image, reference-image editing, and multi-turn iterative refinement. Generated images are saved to the working directory.'
+function buildImageDescription(config: DuoConfig): string {
+  let desc = 'Generate or edit images using AI. Supports multiple mainstream models (OpenAI gpt-image, Google Gemini/nano-banana, Doubao Seedream, Zhipu GLM-Image/CogView, MiniMax, Tongyi Wanx, Qwen-Image). Supports text-to-image, reference-image editing, and multi-turn iterative refinement. Generated images are saved to the working directory.'
+  // 当配置的是 Gemini 时，补充专属参数说明（English prompts 最佳）
+  try {
+    const resolved = resolveModality(config, 'image')
+    if (resolved && resolved.config.protocol === 'gemini-generate-content') {
+      desc += '\n\nCurrently using Gemini (Nano Banana): use English prompts for best results. Supports aspectRatio (1:1/16:9/4:3/9:16/3:4) and imageSize (auto/1K/2K/4K).'
+    }
+  } catch {
+    // 解析失败时静默，用基础描述
+  }
+  return desc
 }
 
 function buildVideoDescription(): string {
@@ -272,6 +284,9 @@ export async function runGeneration(
     outputCompression: optionalNumberArg(args, 'outputCompression', 'output_compression'),
     background: optionalEnumStringArg(args, ['transparent', 'opaque', 'auto'] as const, 'background'),
     moderation: optionalEnumStringArg(args, ['auto', 'low'] as const, 'moderation'),
+    // Gemini（nano-banana）专属参数
+    aspectRatio: optionalEnumStringArg(args, ['1:1', '16:9', '4:3', '9:16', '3:4'] as const, 'aspectRatio', 'aspect_ratio'),
+    imageSize: optionalEnumStringArg(args, ['auto', '1K', '2K', '4K'] as const, 'imageSize', 'image_size'),
     negativePrompt: optionalStringArg(args, 'negativePrompt', 'negative_prompt'),
     seed: optionalNumberArg(args, 'seed'),
     promptEnhance: optionalBoolArg(args, 'promptEnhance', 'prompt_enhance'),
@@ -330,7 +345,7 @@ export function createMcpServer(outputDirOverride?: string): Server {
 
   // 候选工具列表（按已配置好的模态过滤）
   const candidates: ToolDefinition[] = [
-    { name: 'generate_image', description: buildImageDescription(), modality: 'image', inputSchema: IMAGE_SCHEMA },
+    { name: 'generate_image', description: buildImageDescription(config), modality: 'image', inputSchema: IMAGE_SCHEMA },
     { name: 'generate_video', description: buildVideoDescription(), modality: 'video', inputSchema: VIDEO_SCHEMA },
     { name: 'generate_audio', description: buildAudioDescription(config), modality: 'audio', inputSchema: AUDIO_SCHEMA },
   ]
