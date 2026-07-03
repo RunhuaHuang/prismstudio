@@ -82,6 +82,16 @@ export function prefixForMediaType(mediaType: string): string {
   return 'image-gen'
 }
 
+/**
+ * 清洗用户指定的语义化文件名：去除扩展名、非法路径字符、首尾点横线，
+ * 限制长度。仅保留字母数字、连字符、下划线、中文等安全字符。
+ */
+export function sanitizeFilename(raw: string): string {
+  const base = raw.trim().replace(/\.[a-z0-9]+$/i, '')
+  const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^[.\-]+|[.\-]+$/g, '')
+  return cleaned.slice(0, 80) || 'output'
+}
+
 // ===== 主落盘函数 =====
 
 export interface PersistOptions {
@@ -102,11 +112,16 @@ export interface PersistResult {
  *
  * @param generated 引擎返回的生成产物（base64）
  * @param modalityLabel 模态中文名（用于摘要文本，如 "图片"）
+ * @param options 落盘选项
+ * @param customFilename 可选语义化文件名（不含扩展名，多张自动加序号后缀）
+ * @param providerTag 可选厂商/模型标签（用于摘要，如 "Google · Gemini Flash Image"）
  */
 export function persistGenerated(
   generated: GeneratedImageData[],
   modalityLabel: string,
   options: PersistOptions,
+  customFilename?: string,
+  providerTag?: string,
 ): PersistResult {
   const items: PersistedItem[] = []
   const content: McpContent[] = []
@@ -121,10 +136,15 @@ export function persistGenerated(
     if (!isAlreadyExistsError(err)) console.warn(`[duo-mcp] 创建输出目录失败:`, err)
   }
 
-  for (const item of generated) {
+  const sanitizedCustom = customFilename?.trim() ? sanitizeFilename(customFilename.trim()) : ''
+
+  for (let i = 0; i < generated.length; i++) {
+    const item = generated[i]!
     const ext = extForMediaType(item.mediaType)
-    const prefix = prefixForMediaType(item.mediaType)
-    const filename = `${prefix}-${randomUUID().slice(0, 8)}${ext}`
+    const suffix = generated.length > 1 ? `-${i + 1}` : ''
+    const filename = sanitizedCustom
+      ? `${sanitizedCustom}${suffix}${ext}`
+      : `${prefixForMediaType(item.mediaType)}-${randomUUID().slice(0, 8)}${ext}`
 
     let localPath: string | undefined
     try {
@@ -151,10 +171,11 @@ export function persistGenerated(
   }
 
   const count = generated.length
+  const providerSuffix = providerTag ? ` · ${providerTag}` : ''
   const pathInfo = savedPaths.length > 0
     ? `\n${modalityLabel}已保存到本地:\n${textParts.join('\n')}`
     : `\n${modalityLabel}生成完成，但未能保存到本地。`
-  const summary = count > 0 ? `${modalityLabel}已生成（${count} 个）${pathInfo}` : `未生成${modalityLabel}内容`
+  const summary = count > 0 ? `${modalityLabel}已生成（${count} 个）${providerSuffix}${pathInfo}` : `未生成${modalityLabel}内容${providerSuffix}`
   content.push({ type: 'text', text: summary })
 
   return { items, content, savedPaths }

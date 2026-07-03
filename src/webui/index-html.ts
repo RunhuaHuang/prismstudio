@@ -190,7 +190,7 @@ textarea{resize:vertical;line-height:1.6}
 .cmd-menu{
   position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;
   background:var(--surface-3);border:1px solid var(--line-bright);border-radius:var(--radius);
-  box-shadow:var(--shadow-lg);max-height:280px;overflow-y:auto;padding:var(--space-xs);
+  box-shadow:var(--shadow-lg);max-height:70vh;overflow-y:auto;padding:var(--space-xs);
   animation:cmdIn .14s cubic-bezier(.2,.8,.2,1);
 }
 @keyframes cmdIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
@@ -280,7 +280,7 @@ textarea{resize:vertical;line-height:1.6}
 
 .channel{
   background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);
-  padding:var(--space-lg);position:relative;overflow:hidden;
+  padding:var(--space-lg);position:relative;
   transition:border-color .2s,transform .2s;
 }
 .channel::before{
@@ -549,8 +549,8 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
                   <div>
                     <div class="cmd-group-label" x-show="grp.label && grp.label !== '—'" x-text="grp.label"></div>
                     <template x-for="item in grp.items" :key="item.value">
-                      <div class="cmd-item" :class="{ selected: value===item.value, 'kb-active': isKbActive(item), disabled: item.disabled }"
-                           @click="pick(item)" @mouseenter="kbIndex = _flat.indexOf(item)">
+                      <div class="cmd-item" :class="{ selected: selectedVal===item.value, 'kb-active': isKbActive(item), disabled: item.disabled }"
+                           @click="pick(item)" @mouseenter="kbIndex = _flat.findIndex(x => x.value === item.value)">
                         <span class="cmd-item-main" x-text="item.label"></span>
                         <span class="cmd-item-tag" x-show="item.tag" x-text="item.tag"></span>
                       </div>
@@ -563,9 +563,25 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
           </div>
 
           <div class="ch-field">
-            <span class="label" x-text="t.labelApiKey"></span>
-            <input type="password" x-model="config[m.key].apiKey"
-              :placeholder="config[m.key]?.apiKey?.includes('****') ? t.phKeyStored : t.phKeyPaste" />
+            <span class="label" x-text="isGoogleCloud(m.key) ? t.labelGcpJson : t.labelApiKey"></span>
+            <template x-if="!isGoogleCloud(m.key)">
+              <input type="password" x-model="config[m.key].apiKey"
+                :placeholder="config[m.key]?.apiKey?.includes('****') ? t.phKeyStored : t.phKeyPaste" />
+            </template>
+            <template x-if="isGoogleCloud(m.key)">
+              <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;width:100%">
+                <div style="display:flex;align-items:center;gap:12px;width:100%;flex-wrap:wrap">
+                  <button type="button" class="btn" @click="document.getElementById('fileInput_' + m.key)?.click()">
+                    <span x-text="config[m.key]?.apiKey ? t.btnSelectGcpJsonChange : t.btnSelectGcpJson"></span>
+                  </button>
+                  <input type="file" :id="'fileInput_' + m.key" accept=".json" @change="onFileChange($event, m.key)" style="display:none" />
+                  <template x-if="config[m.key]?.apiKey">
+                    <span style="font-size:var(--fs-mono-xs);color:#58a6ff;font-family:'JetBrains Mono',monospace" x-text="getGcpCredentialDesc(config[m.key].apiKey)"></span>
+                  </template>
+                </div>
+                <span style="font-size:var(--fs-mono-xs);color:var(--text-dim)" x-text="t.gcpJsonHelp"></span>
+              </div>
+            </template>
           </div>
 
           <template x-if="config[m.key].presetId === 'custom'">
@@ -640,8 +656,8 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
               </button>
               <div class="cmd-menu" x-show="open" @click.away="close">
                 <template x-for="item in groups[0].items" :key="item.value">
-                  <div class="cmd-item" :class="{ selected: value===item.value, 'kb-active': isKbActive(item) }"
-                       @click="pick(item)" @mouseenter="kbIndex = _flat.indexOf(item)">
+                  <div class="cmd-item" :class="{ selected: selectedVal===item.value, 'kb-active': isKbActive(item) }"
+                       @click="pick(item)" @mouseenter="kbIndex = _flat.findIndex(x => x.value === item.value)">
                     <span class="cmd-item-main" x-text="item.label"></span>
                   </div>
                 </template>
@@ -754,7 +770,7 @@ function dropdown(initial) {
     _getGroups: initial.getGroups || (()=>[]),
 
     // 响应式：每次访问都从父级读最新值/分组
-    get value() { return this._getValue() },
+    get selectedVal() { return this._getValue() },
     get groups() { return this._getGroups() },
     get _flat() {
       const out = []
@@ -762,18 +778,18 @@ function dropdown(initial) {
       return out
     },
     get triggerLabel() {
-      const v = this.value
+      const v = this.selectedVal
       for (const g of this.groups) {
         const f = (g.items || []).find(i => i.value === v)
         if (f) return f.label
       }
       return this.placeholder
     },
-    get isPlaceholder() { return !this.value },
+    get isPlaceholder() { return !this.selectedVal },
     toggle() { this.open ? this.close() : this.openMenu() },
     openMenu() {
       this.open = true
-      const idx = this._flat.findIndex(i => i.value === this.value)
+      const idx = this._flat.findIndex(i => i.value === this.selectedVal)
       this.kbIndex = idx >= 0 ? idx : (this._flat.length ? 0 : -1)
       this.$nextTick(() => this.scrollKbIntoView())
     },
@@ -801,7 +817,10 @@ function dropdown(initial) {
         if (el) el.scrollIntoView({ block: 'nearest' })
       })
     },
-    isKbActive(item) { return this._flat.indexOf(item) === this.kbIndex },
+    isKbActive(item) {
+      if (this.kbIndex < 0 || this.kbIndex >= this._flat.length) return false
+      return this._flat[this.kbIndex].value === item.value
+    },
   }
 }
 
@@ -825,6 +844,10 @@ function duoApp() {
         phSelectModel: '请选择模型',
         customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
+        labelGcpJson: 'Google Cloud JSON 凭证',
+        btnSelectGcpJson: '选择 JSON 凭证文件',
+        btnSelectGcpJsonChange: '重新选择 JSON 凭证文件',
+        gcpJsonHelp: '选择后系统会读取 JSON 内容作为 API 凭证进行保存。',
         phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
         labelModelProto: '模型 / 协议 / BaseURL',
         phModel: '模型 ID', phProtocol: '协议（如 openai-images）', phBaseUrl: 'base url（可选）',
@@ -859,6 +882,10 @@ function duoApp() {
         phSelectModel: 'Select a model',
         customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
+        labelGcpJson: 'Google Cloud JSON',
+        btnSelectGcpJson: 'Select JSON File',
+        btnSelectGcpJsonChange: 'Change JSON File',
+        gcpJsonHelp: 'After selection, the system reads the JSON content to save as API credentials.',
         phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
         labelModelProto: 'Model / Protocol / BaseURL',
         phModel: 'model-id', phProtocol: 'protocol (e.g. openai-images)', phBaseUrl: 'base url (optional)',
@@ -918,8 +945,9 @@ function duoApp() {
         getGroups: () => {
           const byVendor = {}
           for (const p of (self.presets[key] || [])) {
+            const cleanLabel = p.label.includes('·') ? p.label.replace(/^[^·]+·\s*/, '') : p.label;
             (byVendor[p.vendor] = byVendor[p.vendor] || []).push({
-              value: p.id, label: p.model, tag: p.protocol,
+              value: p.id, label: cleanLabel, tag: p.protocol,
             })
           }
           const groups = Object.entries(byVendor).map(([vendor, items]) => ({ label: vendor, items }))
@@ -947,6 +975,47 @@ function duoApp() {
       this.onPresetChange(key)
     },
     onTaskSelect(e) { this.test.task = e.detail.value; },
+    isGoogleCloud(key) {
+      const pid = this.config[key]?.presetId
+      if (!pid) return false
+      const p = (this.presets[key] || []).find(x => x.id === pid)
+      return p && p.vendor === 'Google Cloud Service (Vertex)'
+    },
+    onFileChange(e, key) {
+      const file = e.target.files[0]
+      if (!file) return
+      const reader = new FileReader()
+      reader.onload = (evt) => {
+        try {
+          const text = evt.target.result
+          const parsed = JSON.parse(text)
+          if (parsed && typeof parsed === 'object') {
+            this.config[key].apiKey = text
+          } else {
+            alert(this.lang === 'zh' ? '无效的 JSON 文件' : 'Invalid JSON file')
+          }
+        } catch (err) {
+          alert((this.lang === 'zh' ? '解析 JSON 失败：' : 'Failed to parse JSON: ') + err.message)
+        }
+      }
+      reader.readAsText(file)
+    },
+    getGcpCredentialDesc(key) {
+      if (!key) return ''
+      if (key.startsWith('JSON:')) {
+        const parts = key.split(':')
+        const type = parts[1] === 'service_account' ? (this.lang === 'zh' ? '服务账号' : 'Service Account') : (this.lang === 'zh' ? '用户账号' : 'Authorized User')
+        const projectId = parts[2]?.replace('·****', '') || ''
+        return this.lang === 'zh' ? '已导入 GCP ' + type + ' (' + projectId + ')' : 'Imported GCP ' + type + ' (' + projectId + ')'
+      }
+      try {
+        const parsed = JSON.parse(key)
+        const type = parsed.type === 'service_account' ? (this.lang === 'zh' ? '服务账号' : 'Service Account') : (this.lang === 'zh' ? '用户账号' : 'Authorized User')
+        const projectId = parsed.project_id || parsed.quota_project_id || 'unknown'
+        return this.lang === 'zh' ? '已选择 GCP ' + type + ' (' + projectId + ')' : 'Selected GCP ' + type + ' (' + projectId + ')'
+      } catch {}
+      return this.lang === 'zh' ? '已选择 JSON 文件' : 'Selected JSON file'
+    },
     config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
     // 各模态切换前的 presetId（内存态，不存 config.json，供 onPresetChange 判断新旧）
     _lastPreset: { image:'', video:'', audio:'' },
@@ -1048,10 +1117,12 @@ function duoApp() {
       if (oldPresetId && oldPresetId !== newPresetId && mod.apiKey && !mod.apiKey.includes('****')) {
         mod.apiKeyByPreset[oldPresetId] = mod.apiKey;
       }
-      // 恢复新 preset 的 key（若有记忆且非脱敏则用记忆值，否则清空）
+      // 恢复新 preset 的 key（若有记忆且非脱敏则用记忆值；
+      // 若记忆值含 ****（服务器侧有 key），保留脱敏占位以免被 mergeConfig 当作清空；
+      // 否则清空让用户填写）
       if (newPresetId !== oldPresetId) {
         const remembered = mod.apiKeyByPreset[newPresetId];
-        mod.apiKey = (remembered && !remembered.includes('****')) ? remembered : '';
+        mod.apiKey = remembered || '';
       }
       this._lastPreset[key] = newPresetId;
       // 应用预设的 model/protocol（custom 不动）

@@ -94,6 +94,14 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 /** 对配置做脱敏（隐藏 apiKey 中间部分） */
 function maskApiKey(key: string): string {
   if (!key) return ''
+  try {
+    const parsed = JSON.parse(key)
+    if (parsed && typeof parsed === 'object') {
+      const type = parsed.type || 'service_account'
+      const projectId = parsed.project_id || parsed.quota_project_id || 'unknown-project'
+      return `JSON:${type}:${projectId}·****`
+    }
+  } catch {}
   if (key.length <= 8) return '****'
   return key.slice(0, 4) + '****' + key.slice(-4)
 }

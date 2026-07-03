@@ -30,6 +30,7 @@ import {
   setLastGenerated,
   getLastGenerated,
   selectGeneratedImagesForImageRequest,
+  resolveDashscopeVideoVariant,
   MEDIA_MODEL_PRESETS,
   getPresetsByModality,
   type MediaModality,
@@ -114,6 +115,7 @@ const IMAGE_SCHEMA: Record<string, unknown> = {
     guidanceScale: { type: 'number', description: 'CFG/guidance scale where supported.' },
     aspectRatio: { type: 'string', enum: ['1:1', '16:9', '4:3', '9:16', '3:4'], description: 'Gemini only: output aspect ratio (default 1:1).' },
     imageSize: { type: 'string', enum: ['auto', '1K', '2K', '4K'], description: 'Gemini only: output resolution (default auto).' },
+    filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "neymar-world-cup-shot"). If omitted, a random name is used.' },
   },
   required: ['prompt'],
 }
@@ -122,21 +124,31 @@ const VIDEO_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     prompt: { type: 'string', description: 'Description of the video to generate.' },
-    duration: { type: 'number', description: 'Video duration in seconds (default 5).' },
+    duration: { type: 'number', description: 'Video duration in seconds where supported. DashScope HappyHorse t2v/i2v/r2v: 3-15; wan2.7 t2v/i2v/r2v: 2-15; wan2.7 r2v with reference video and videoedit: 2-10; wan2.7 videoedit also accepts 0 to follow input.' },
     size: { type: 'string', description: 'Aspect ratio or resolution, e.g. 16:9 or 1280x720.' },
+    numberOfVideos: { type: 'number', description: 'How many videos to generate where supported.' },
     referenceImagePaths: { type: 'array', items: { type: 'string' }, description: 'Optional local reference image paths for image-to-video.' },
+    referenceMode: { type: 'string', enum: ['first_frame', 'reference'], description: 'When exactly 1 reference image is provided for HappyHorse/wan2.7 (auto-routed): "first_frame" = use the image as the video first frame and animate it (→ i2v, default); "reference" = use the image as a style/character reference to generate a new video (→ r2v). Ignored when 0 images (→ t2v) or ≥2 images (→ r2v).' },
+    referenceType: { type: 'string', enum: ['asset', 'style'], description: 'Google Veo only: semantic type for referenceImages when referenceMode="reference". Use asset for subject/object references, style for visual style references.' },
+    lastFrameImagePath: { type: 'string', description: 'Final-frame image path where supported, e.g. Google Veo lastFrame or wan2.7 i2v last_frame.' },
+    videoPath: { type: 'string', description: 'Google Veo only: local video path to extend.' },
+    videoUrl: { type: 'string', description: 'DashScope video URL. wan2.7 uses public HTTP(S)/OSS URLs for first_clip/reference_video/video-edit; HappyHorse only supports videoUrl on happyhorse-1.0-video-edit.' },
     negativePrompt: { type: 'string', description: 'Optional negative prompt where supported.' },
     seed: { type: 'number', description: 'Optional random seed where supported.' },
     promptEnhance: { type: 'boolean', description: 'Enable/disable provider prompt enhancement where supported.' },
     watermark: { type: 'boolean', description: 'Enable/disable watermark where supported.' },
-    resolution: { type: 'string', description: 'Provider-specific resolution, e.g. 720P, 1080P.' },
+    resolution: { type: 'string', description: 'Provider-specific resolution, e.g. 720p, 1080p, 4k. Veo 3.1 Lite does not support 4k.' },
+    personGeneration: { type: 'string', enum: ['allow_all', 'allow_adult', 'dont_allow'], description: 'Google Veo only: person generation policy.' },
     fps: { type: 'number', description: 'Frames per second where supported.' },
     withAudio: { type: 'boolean', description: 'Generate video with AI audio where supported.' },
+    audioUrl: { type: 'string', description: 'DashScope wan2.7 only: public HTTP(S) or OSS audio URL for t2v audio_url or i2v driving_audio.' },
+    audioSetting: { type: 'string', enum: ['auto', 'origin'], description: 'DashScope video-edit/HappyHorse where supported: audio_setting.' },
     frames: { type: 'number', description: 'Total output frames where supported.' },
     returnLastFrame: { type: 'boolean', description: 'Return last frame metadata where supported.' },
     cameraFixed: { type: 'boolean', description: 'Fix/disable camera motion where supported.' },
     mode: { type: 'string', description: 'Provider-specific generation mode, e.g. std/pro.' },
     guidanceScale: { type: 'number', description: 'CFG/guidance scale where supported.' },
+    filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "ocean-sunset-clip"). If omitted, a random name is used.' },
   },
   required: ['prompt'],
 }
@@ -159,6 +171,10 @@ const AUDIO_SCHEMA: Record<string, unknown> = {
     musicOutputFormat: { type: 'string', enum: ['hex', 'url'], description: 'MiniMax music: response format.' },
     sampleRate: { type: 'number', description: 'MiniMax music audio_setting.sample_rate.' },
     bitrate: { type: 'number', description: 'MiniMax music audio_setting.bitrate.' },
+    coverFeatureId: { type: 'string', description: 'MiniMax music-cover: preprocessed cover feature id.' },
+    audioUrl: { type: 'string', description: 'MiniMax music-cover: remote reference audio URL.' },
+    aigcWatermark: { type: 'boolean', description: 'MiniMax music: append AIGC watermark when supported.' },
+    filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "podcast-intro"). If omitted, a random name is used.' },
   },
   required: ['text'],
 }
@@ -283,10 +299,15 @@ export async function runGeneration(
     config: resolved.config,
     apiKey: resolved.apiKey,
     size: optionalStringArg(args, 'size'),
-    numberOfImages: optionalNumberArg(args, 'numberOfImages'),
+    numberOfImages: typeof args.numberOfVideos === 'number' ? args.numberOfVideos : (typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined),
     duration: optionalNumberArg(args, 'duration'),
     referencePaths,
+    lastFramePath: optionalStringArg(args, 'lastFrameImagePath', 'last_frame_image_path', 'lastFramePath', 'last_frame_path'),
+    videoPath: optionalStringArg(args, 'videoPath', 'video_path', 'referenceVideoPath', 'reference_video_path'),
+    videoUrl: optionalStringArg(args, 'videoUrl', 'video_url', 'referenceVideoUrl', 'reference_video_url'),
     isEdit,
+    referenceMode: optionalEnumStringArg(args, ['first_frame', 'reference'] as const, 'referenceMode'),
+    referenceType: optionalEnumStringArg(args, ['asset', 'style'] as const, 'referenceType', 'reference_type'),
     quality: optionalEnumStringArg(args, ['low', 'medium', 'high', 'auto'] as const, 'quality'),
     outputFormat: optionalEnumStringArg(args, ['png', 'jpeg', 'webp'] as const, 'outputFormat', 'output_format'),
     outputCompression: optionalNumberArg(args, 'outputCompression', 'output_compression'),
@@ -302,6 +323,9 @@ export async function runGeneration(
     resolution: optionalStringArg(args, 'resolution'),
     fps: optionalNumberArg(args, 'fps'),
     withAudio: optionalBoolArg(args, 'withAudio', 'with_audio'),
+    audioUrl: optionalStringArg(args, 'audioUrl', 'audio_url'),
+    audioSetting: optionalEnumStringArg(args, ['auto', 'origin'] as const, 'audioSetting', 'audio_setting'),
+    personGeneration: optionalStringArg(args, 'personGeneration', 'person_generation'),
     frames: optionalNumberArg(args, 'frames'),
     returnLastFrame: optionalBoolArg(args, 'returnLastFrame', 'return_last_frame'),
     cameraFixed: optionalBoolArg(args, 'cameraFixed', 'camera_fixed'),
@@ -321,6 +345,8 @@ export async function runGeneration(
     musicOutputFormat: optionalEnumStringArg(args, ['hex', 'url'] as const, 'musicOutputFormat', 'outputFormat', 'output_format'),
     sampleRate: optionalNumberArg(args, 'sampleRate', 'sample_rate'),
     bitrate: optionalNumberArg(args, 'bitrate'),
+    coverFeatureId: optionalStringArg(args, 'coverFeatureId', 'cover_feature_id'),
+    aigcWatermark: optionalBoolArg(args, 'aigcWatermark', 'aigc_watermark'),
     cwd: ctx.outputDir,
     sessionId,
   })
@@ -332,7 +358,19 @@ export async function runGeneration(
 
   const modalityLabel = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'
   const outDir = resolve(ctx.outputDir, 'generated-media')
-  const { content, savedPaths } = persistGenerated(selected, modalityLabel, { outputDir: outDir })
+  // 摘要标签：厂商 + 路由后的实际模型（让用户看到当前走的是哪个 provider/变体）
+  const vendor = resolved.config.preset?.vendor ?? ''
+  const refMode = optionalStringArg(args, 'referenceMode') as 'first_frame' | 'reference' | undefined
+  const routeByVideoInput = resolved.config.model.startsWith('wan2.7') && (args.videoUrl || args.video_url || args.videoPath || args.video_path)
+  const routeRefCount = routeByVideoInput
+    ? Math.max(1, referencePaths?.length ?? 0)
+    : (referencePaths?.length ?? 0)
+  const routedModel = modality === 'video'
+    ? (resolveDashscopeVideoVariant(resolved.config.model, routeRefCount, refMode) ?? resolved.config.model)
+    : resolved.config.model
+  const providerTag = vendor ? `${vendor}${routedModel ? ' · ' + routedModel : ''}` : (routedModel || '')
+  const customName = optionalStringArg(args, 'filename')
+  const { content, savedPaths } = persistGenerated(selected, modalityLabel, { outputDir: outDir }, customName, providerTag)
 
   // 多轮：缓存首项路径
   if (savedPaths.length > 0) setLastGenerated(modality, sessionId, savedPaths[0]!)

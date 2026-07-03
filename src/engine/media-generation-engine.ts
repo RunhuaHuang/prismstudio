@@ -26,6 +26,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import { createHmac } from 'node:crypto'
+import {
+  isGoogleVertexJsonCredential,
+  buildGoogleGenerateContentRequestTarget,
+  buildGooglePredictLongRunningRequestTarget,
+  buildGoogleInteractionsRequestTarget,
+} from './google-auth.js'
 
 // ===== 模态与协议族 =====
 
@@ -56,6 +62,7 @@ export type MediaProtocol =
   | 'tencent-hunyuan-async'
   | 'midjourney'
   | 'gemini-generate-content'
+  | 'google-interactions'
 
 // ===== 模型预设 =====
 
@@ -95,18 +102,47 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
   },
   // ===== 图像：Google Gemini（nano-banana / Gemini Image，原生多轮编辑） =====
   {
-    id: 'gemini-flash-image', label: 'Gemini · Flash Image (nano-banana)', vendor: 'Google',
+    id: 'gemini-flash-image', label: 'Gemini · Flash Image (nano-banana)', vendor: 'Google Gemini',
     modality: 'image', protocol: 'gemini-generate-content',
     baseUrl: 'https://generativelanguage.googleapis.com',
     model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1',
     helpUrl: 'https://aistudio.google.com/apikey',
   },
   {
-    id: 'gemini-pro-image', label: 'Gemini · Pro Image', vendor: 'Google',
+    id: 'gemini-pro-image', label: 'Gemini · Pro Image', vendor: 'Google Gemini',
     modality: 'image', protocol: 'gemini-generate-content',
     baseUrl: 'https://generativelanguage.googleapis.com',
     model: 'gemini-3.1-pro-image', supportsEdit: true, defaultSize: '1:1',
     helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'gemini-flash-lite-image', label: 'Gemini · Flash Lite Image (nano-banana 2 lite)', vendor: 'Google Gemini',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'gemini-3.1-flash-lite-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  // ===== 图像：Google Cloud（Vertex AI） =====
+  {
+    id: 'google-vertex-flash-image', label: 'Vertex · Flash Image', vendor: 'Google Cloud Service (Vertex)',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://aiplatform.googleapis.com',
+    model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
+  },
+  {
+    id: 'google-vertex-pro-image', label: 'Vertex · Pro Image', vendor: 'Google Cloud Service (Vertex)',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://aiplatform.googleapis.com',
+    model: 'gemini-3.1-pro-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
+  },
+  {
+    id: 'google-vertex-flash-lite-image', label: 'Vertex · Flash Lite Image', vendor: 'Google Cloud Service (Vertex)',
+    modality: 'image', protocol: 'gemini-generate-content',
+    baseUrl: 'https://aiplatform.googleapis.com',
+    model: 'gemini-3.1-flash-lite-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
   },
   {
     id: 'doubao-seedream-5-lite', label: '豆包 · Seedream 5.0 Lite（火山方舟）', vendor: '豆包',
@@ -293,13 +329,19 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
   },
   {
-    id: 'wanx-2-7-t2v', label: '万相 · wan2.7-t2v', vendor: '万相',
+    id: 'wanx-2-7-t2v', label: '万相 · wan2.7（智能路由）', vendor: '万相',
     modality: 'video', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     model: 'wan2.7-t2v', supportsEdit: false, defaultSize: '1280*720',
     helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
   },
   {
-    id: 'qwen-happyhorse', label: 'Qwen · HappyHorse（通义千问）', vendor: 'Qwen',
+    id: 'wanx-2-7-videoedit', label: '万相 · wan2.7-videoedit（视频编辑）', vendor: '万相',
+    modality: 'video', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    model: 'wan2.7-videoedit', supportsEdit: true, defaultSize: '1280*720',
+    helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
+  },
+  {
+    id: 'qwen-happyhorse', label: 'Qwen · happyhorse-1.1（智能路由）', vendor: 'Qwen',
     modality: 'video', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     model: 'happyhorse-1.1-t2v', supportsEdit: false, defaultSize: '1280*720',
     helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
@@ -309,6 +351,36 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     modality: 'video', protocol: 'tencent-hunyuan-async', baseUrl: 'https://tokenhub.tencentmaas.com/v1',
     model: 'hy-video-1.5', supportsEdit: false, defaultSize: '1280x720',
     helpUrl: 'https://tokenhub.tencentmaas.com',
+  },
+  {
+    id: 'google-veo-31', label: 'Google · Veo 3.1', vendor: 'Google Gemini',
+    modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'veo-3.1-generate-preview', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'google-veo-31-fast', label: 'Google · Veo 3.1 Fast', vendor: 'Google Gemini',
+    modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'veo-3.1-fast-generate-preview', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'google-veo-31-lite', label: 'Google · Veo 3.1 Lite', vendor: 'Google Gemini',
+    modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'veo-3.1-lite-generate-preview', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'google-omni-flash', label: 'Google · Gemini Omni Flash', vendor: 'Google Gemini',
+    modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com',
+    model: 'gemini-omni-flash-preview', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'google-vertex-omni-flash', label: 'Vertex · Gemini Omni Flash', vendor: 'Google Cloud Service (Vertex)',
+    modality: 'video', protocol: 'google-interactions', baseUrl: 'https://aiplatform.googleapis.com',
+    model: 'gemini-omni-flash-preview', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
   },
 
   // ===== 音频 =====
@@ -532,10 +604,18 @@ export function resolveMediaConfig(
   credentials: Record<string, string>,
   modality: MediaModality,
 ): ResolvedMediaConfig | null {
-  const model = credentials.model?.trim()
+  let model = credentials.model?.trim()
   if (!model) return null
 
-  const matched = findPresetForCredentials(credentials, modality)
+  // 智能路由系列（HappyHorse / wan2.7）：旧配置可能存的是 i2v/r2v 变体，
+  // 统一归一化为 t2v 基础模型——运行时由 resolveDashscopeVideoVariant 按参考图数量重新选择变体。
+  // 这样预设解析（只认 t2v）能正常匹配，UI 下拉也能正确选中「智能路由」选项。
+  if (modality === 'video') {
+    const base = resolveDashscopeVideoVariant(model, 0)
+    if (base) model = base
+  }
+
+  const matched = findPresetForCredentials({ ...credentials, model }, modality)
   if (matched) {
     return {
       preset: matched,
@@ -576,6 +656,7 @@ export function resolveMediaConfig(
 const EXT_TO_MIME: Record<string, string> = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
   '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+  '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
   '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.opus': 'audio/opus',
 }
@@ -645,6 +726,7 @@ export function clearMediaGenerationSessionHistory(sessionId: string): void {
   }
   // 同时清理 Gemini 多轮历史（统一入口，避免调用方需要分别清理）
   geminiSessionHistory.delete(sessionId)
+  googleOmniInteractionHistory.delete(sessionId)
 }
 
 // ===== 通用工具 =====
@@ -665,8 +747,9 @@ async function downloadAsBase64(
   fetchFn: typeof globalThis.fetch,
   signal?: AbortSignal,
   fallbackMediaType = 'image/png',
+  headers?: Record<string, string>,
 ): Promise<GeneratedImageData> {
-  const response = await fetchFn(url, { signal })
+  const response = await fetchFn(url, { ...(headers ? { headers } : {}), signal })
   if (!response.ok) {
     throw new Error(`下载生成内容失败 (${response.status})`)
   }
@@ -903,7 +986,22 @@ export interface GenerateMediaInput {
   duration?: number
   /** 参考文件本地路径（编辑/图生视频/声音克隆样本） */
   referencePaths?: string[]
+  /** Veo 3.1 末帧控制图路径（lastFrame） */
+  lastFramePath?: string
+  /** Veo 3.1 视频扩展输入路径（video extension） */
+  videoPath?: string
+  /** DashScope/Veo 等支持公网视频素材的协议使用；DashScope 要求 HTTP(S)/OSS URL */
+  videoUrl?: string
   isEdit?: boolean
+  /**
+   * DashScope 视频（HappyHorse / wan2.7）智能路由：1 张参考图时的用途语义。
+   * 'first_frame'=把图作为视频首帧让它动起来（默认，→ i2v）；
+   * 'reference'=把图作为风格/角色参考素材（→ r2v）。
+   * 0 张图忽略此参数（→ t2v）；≥2 张图强制 r2v。
+   */
+  referenceMode?: 'first_frame' | 'reference'
+  /** Veo 3.1 参考图语义：asset=主体/对象参考，style=风格参考 */
+  referenceType?: 'asset' | 'style'
   /** OpenAI Images 高级参数（仅 openai-images 协议族使用） */
   quality?: OpenAiImageQuality
   outputFormat?: OpenAiImageOutputFormat
@@ -922,9 +1020,12 @@ export interface GenerateMediaInput {
   resolution?: string
   fps?: number
   withAudio?: boolean
+  audioSetting?: 'auto' | 'origin'
+  audioUrl?: string
   frames?: number
   returnLastFrame?: boolean
   cameraFixed?: boolean
+  personGeneration?: string
   mode?: string
   guidanceScale?: number
   stylePreset?: string
@@ -949,7 +1050,6 @@ export interface GenerateMediaInput {
   sampleRate?: number
   bitrate?: number
   coverFeatureId?: string
-  audioUrl?: string
   aigcWatermark?: boolean
   cwd?: string
   /** 会话标识，用于 Gemini 多轮历史隔离（其它协议忽略） */
@@ -1010,6 +1110,7 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
     if (protocol === 'dashscope-async') return callDashscopeVideoApi(input, fetchFn, references)
     if (protocol === 'minimax') return callMinimaxVideoApi(input, fetchFn, references)
     if (protocol === 'tencent-hunyuan-async') return callTencentHunyuanAsyncApi(input, fetchFn, references)
+    if (protocol === 'google-interactions') return callGoogleInteractionsVideoApi(input, fetchFn, references)
     throw new Error(`视频不支持协议族: ${protocol}`)
   }
 
@@ -1388,7 +1489,7 @@ interface GeminiContent {
   parts: GeminiPart[]
 }
 interface GeminiResponse {
-  candidates?: Array<{ content: { parts: GeminiPart[]; role: string } }>
+  candidates?: Array<{ content?: { parts?: GeminiPart[]; role?: string }; finishReason?: string }>
   error?: { message: string; code: number }
 }
 
@@ -1466,11 +1567,11 @@ async function callGeminiImageApi(
   const aspectRatio = input.aspectRatio?.trim() || undefined
 
   const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, input.imageSize)
-  const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`
+  const target = await buildGoogleGenerateContentRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model })
 
-  const response = await fetchFn(url, {
+  const response = await fetchFn(target.url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: target.headers,
     body: JSON.stringify(requestBody),
     ...(input.signal ? { signal: input.signal } : {}),
   })
@@ -1480,11 +1581,16 @@ async function callGeminiImageApi(
     throw new Error(`Gemini API 请求失败 (${response.status}): ${errorText.slice(0, 200)}`)
   }
 
-  const data = (await response.json()) as GeminiResponse
+  const data = (await safeParseJson(response, 'Gemini')) as GeminiResponse
   if (data.error) throw new Error(`Gemini API 错误: ${data.error.message}`)
   if (!data.candidates?.length) throw new Error('Gemini 未返回任何内容')
 
-  const parts = data.candidates[0]!.content.parts
+  const candidate = data.candidates[0]
+  const parts = candidate?.content?.parts
+  if (!parts || parts.length === 0) {
+    const reason = candidate?.finishReason
+    throw new Error(`Gemini 未返回内容${reason ? `（finishReason: ${reason}；可能被安全策略拦截）` : ''}`)
+  }
 
   // 提取图片（跳过 thought parts）和文本
   const images: GeneratedImageData[] = []
@@ -1503,6 +1609,13 @@ async function callGeminiImageApi(
     userMessage: input.prompt,
     defaultCount: input.numberOfImages ?? 1,
   })
+  // Gemini 返回了文本/思考 parts 但没有任何 inlineData 图片（如 finishReason: NO_IMAGE），
+  // 需显式报错——其他图像协议对"成功但零图"也视为失败。
+  if (selectedImages.length === 0) {
+    const reason = candidate?.finishReason
+    const textHint = textParts.length > 0 ? `，模型回复: ${textParts.join(' ').slice(0, 100)}` : ''
+    throw new Error(`Gemini 未生成图片${reason ? `（finishReason: ${reason}）` : ''}${textHint}`)
+  }
 
   // 更新多轮历史（保留原始 parts 含 thoughtSignature）
   const userContent: GeminiContent = { role: 'user', parts: [...referenceImageParts, { text: input.prompt }] }
@@ -1729,45 +1842,201 @@ async function callDashscopeImageApi(
   return pollTask(taskId, baseUrl, input.apiKey, fetchFn, input.signal, input.pollIntervalMs ?? POLL_INTERVAL_MS, IMAGE_POLL_TIMEOUT_MS, 'DashScope')
 }
 
-async function callDashscopeVideoApi(input: GenerateMediaInput, fetchFn: typeof globalThis.fetch, references: ReferenceFile[]): Promise<GenerateMediaOutput> {
-  const { baseUrl, model } = input.config
-  if (!baseUrl) throw new Error('dashscope-async 缺少 baseUrl')
-  const size = resolveRequestedSize(input) || input.config.preset?.defaultSize || '1280*720'
-  const ref = references[0]
-  const aspectRatio = sizeToAspectRatio(size) ?? '16:9'
-  const parsedSize = parseSize(size)
-  const isWan27 = model.startsWith('wan2.7')
-  const isImageToVideoModel = /(?:^|-)i2v(?:-|$)/.test(model) || /(?:^|-)kf2v(?:-|$)/.test(model)
-  if (isImageToVideoModel && !ref) {
-    throw new Error(`${model} 是图生视频模型，需要先提供参考图路径（referencePaths）或把图片拖到对话框里`)
+/**
+ * 智能路由：HappyHorse / wan2.7 系列根据参考图数量 + 用途语义（referenceMode）
+ * 自动选择 t2v/i2v/r2v 变体。非该系列模型返回 null（不做路由）。
+ *
+ * 路由规则：
+ *   0 张参考图        → t2v
+ *   ≥2 张参考图       → r2v（参考生视频，无歧义）
+ *   恰好 1 张参考图   → 由 referenceMode 决定：'reference'→r2v，否则→i2v（首帧，默认）
+ *
+ * 匹配的系列（不含 videoedit）：
+ *   happyhorse-1.x-t2v / happyhorse-1.x-i2v / happyhorse-1.x-r2v
+ *   wan2.7-t2v / wan2.7-i2v / wan2.7-r2v（含 -2026-xx-xx 日期快照）
+ */
+export function resolveDashscopeVideoVariant(
+  model: string,
+  refCount: number,
+  referenceMode?: 'first_frame' | 'reference',
+): string | null {
+  // happyhorse-1.x-{variant}（x 可为 0 或 1，兼容 1.0/1.1），保留完整 "happyhorse-1.x" 前缀与可选日期快照
+  const hh = model.match(/^(happyhorse-\d+\.\d+)-(?:t2v|i2v|r2v)(-\d{4}-\d{2}-\d{2})?$/)
+  // wan2.7-{variant}，保留完整 "wan2.7" 前缀与可选日期快照
+  const wan = !hh ? model.match(/^(wan2\.7)-(?:t2v|i2v|r2v)(-\d{4}-\d{2}-\d{2})?$/) : null
+  const base = hh?.[1] ?? wan?.[1]
+  if (!base) return null
+  const suffix = hh?.[2] ?? wan?.[2] ?? ''
+  const targetVariant = refCount === 0 ? 't2v' : refCount >= 2 ? 'r2v' : (referenceMode === 'reference' ? 'r2v' : 'i2v')
+  return `${base}-${targetVariant}${suffix}`
+}
+
+function isUrlLike(value?: string): boolean {
+  return !!value && /^(?:https?:\/\/|oss:\/\/)/i.test(value)
+}
+
+function dashscopeReferenceDataUrl(ref: ReferenceFile): string {
+  return `data:${ref.mediaType};base64,${ref.base64}`
+}
+
+function dashscopeRequestedResolution(input: GenerateMediaInput): string | undefined {
+  if (input.resolution) {
+    const normalized = normalizeDashscopeResolution(input.resolution)
+    if (!normalized) throw new Error(`DashScope 视频分辨率仅支持 720P 或 1080P，当前传入: ${input.resolution}`)
+    return normalized
   }
-  const parameters: Record<string, unknown> = isWan27
-    ? {
-        // wan2.7 官方新接口使用 resolution + ratio；旧版 wan/happyhorse 仍兼容 size。
-        resolution: input.resolution ?? (parsedSize?.h && parsedSize.h >= 1080 ? '1080P' : '720P'),
-        ratio: aspectRatio,
-        duration: input.duration ?? 5,
-        prompt_extend: input.promptEnhance ?? true,
-      }
-    : { size, duration: input.duration ?? 5 }
-  if (input.negativePrompt) parameters.negative_prompt = input.negativePrompt
+  const requestedSize = resolveRequestedSize(input)
+  if (!requestedSize) return undefined
+  const normalized = normalizeDashscopeResolution(requestedSize)
+  if (normalized) return normalized
+  if (/(?:^|[^a-z0-9])4k(?:[^a-z0-9]|$)|2160p|3840\s*[*xX×]\s*2160|2160\s*[*xX×]\s*3840/i.test(requestedSize)) {
+    throw new Error('DashScope 视频分辨率仅支持 720P 或 1080P，不支持 4K')
+  }
+  const parsed = parseSize(requestedSize)
+  return parsed?.h && parsed.h >= 1080 ? '1080P' : '720P'
+}
+
+function normalizeDashscopeResolution(value?: string): '720P' | '1080P' | undefined {
+  const text = value?.trim()
+  if (!text) return undefined
+  if (/^720p$/i.test(text)) return '720P'
+  if (/^1080p$/i.test(text)) return '1080P'
+  if (/^(?:hd|高清)$/i.test(text)) return '720P'
+  if (/^(?:fhd|full\s*hd|全高清)$/i.test(text)) return '1080P'
+  const parsed = parseSize(text)
+  if (parsed) {
+    const longSide = Math.max(parsed.w, parsed.h)
+    const shortSide = Math.min(parsed.w, parsed.h)
+    if (longSide <= 1500 && shortSide <= 1100) return '720P'
+    if (longSide <= 2100 && shortSide <= 1700) return '1080P'
+    return undefined
+  }
+  return undefined
+}
+
+function resolveDashscopeDurationSeconds(input: GenerateMediaInput): number | undefined {
+  return input.duration ?? parseDurationSecondsFromText(input.prompt)
+}
+
+function normalizeIntegerDuration(value: number, model: string): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${model} 的 duration 需要传整数秒`)
+  }
+  return value
+}
+
+function assertDurationRange(model: string, duration: number, min: number, max: number, extra = ''): void {
+  if (duration < min || duration > max) {
+    throw new Error(`${model} 的 duration 支持 ${min}~${max} 秒整数${extra}`)
+  }
+}
+
+function dashscopeVideoUrl(input: GenerateMediaInput): string | undefined {
+  const value = input.videoUrl ?? input.videoPath
+  if (!value) return undefined
+  if (!isUrlLike(value)) {
+    throw new Error('DashScope 视频素材需要公网 HTTP(S) URL 或 OSS 临时 URL；本地视频文件请先上传后通过 videoUrl 传入')
+  }
+  return value
+}
+
+async function callDashscopeVideoApi(input: GenerateMediaInput, fetchFn: typeof globalThis.fetch, references: ReferenceFile[]): Promise<GenerateMediaOutput> {
+  const { baseUrl } = input.config
+  if (!baseUrl) throw new Error('dashscope-async 缺少 baseUrl')
+  // 智能路由：HappyHorse / wan2.7 系列按参考图数量 + referenceMode 选择变体。
+  // 非该系列模型 resolveDashscopeVideoVariant 返回 null，保持原 model 不变。
+  const initialIsWan27 = input.config.model.startsWith('wan2.7')
+  const hasVideoInput = initialIsWan27 && !!(input.videoUrl ?? input.videoPath)
+  const routeRefCount = hasVideoInput ? Math.max(1, references.length) : references.length
+  const routed = resolveDashscopeVideoVariant(input.config.model, routeRefCount, input.referenceMode)
+  const model = routed ?? input.config.model
+  const isHappyHorse = model.startsWith('happyhorse-')
+  const isWan27 = model.startsWith('wan2.7')
+  // 模型变体判定：t2v（文生）/ i2v（首帧图生）/ r2v（参考图生）/ videoedit（视频编辑）
+  // HappyHorse 与 wan2.7 均使用 DashScope 新接口（resolution + ratio），不再用 size。
+  const isT2v = /(?:^|-)t2v(?:-|$)/.test(model)
+  const isI2v = /(?:^|-)i2v(?:-|$)/.test(model) || /(?:^|-)kf2v(?:-|$)/.test(model)
+  const isR2v = /(?:^|-)r2v(?:-|$)/.test(model)
+  const isVideoEdit = /(?:^|-)video-?edit(?:-|$)/.test(model)
+  const videoUrl = dashscopeVideoUrl(input)
+  const needsImageRef = (isI2v && !videoUrl) || isR2v
+  const requestedSize = resolveRequestedSize(input)
+  const aspectRatio = sizeToAspectRatio(requestedSize || input.config.preset?.defaultSize || '16:9') ?? '16:9'
+  if (needsImageRef && references.length === 0) {
+    const hint = isR2v ? '（参考生视频可提供最多 9 张参考图）' : ''
+    throw new Error(`${model} 需要参考图，请先提供路径（referencePaths）或把图片拖到对话框里${hint}`)
+  }
+  if (isVideoEdit && !videoUrl) {
+    throw new Error(`${model} 是视频编辑模型，需要通过 videoUrl 提供待编辑视频的公网 HTTP(S) URL 或 OSS 临时 URL`)
+  }
+  if (videoUrl && isHappyHorse && !isVideoEdit) {
+    throw new Error('HappyHorse 仅视频编辑模型支持 videoUrl；文生/图生/参考生视频请使用文本和 referenceImagePaths')
+  }
+  const parameters: Record<string, unknown> = {}
+  const resolution = dashscopeRequestedResolution(input)
+  if (resolution) parameters.resolution = resolution
+  const requestedDuration = resolveDashscopeDurationSeconds(input)
+  if (requestedDuration !== undefined) {
+    const duration = normalizeIntegerDuration(requestedDuration, model)
+    if (isHappyHorse && isVideoEdit) {
+      throw new Error('happyhorse-1.0-video-edit 不支持通过 duration 指定输出时长；输出时长跟随输入视频，最长 15 秒')
+    } else if (isHappyHorse) {
+      assertDurationRange(model, duration, 3, 15)
+      parameters.duration = duration
+    } else if (isWan27 && isVideoEdit) {
+      if (duration !== 0) assertDurationRange(model, duration, 2, 10, '，或传 0 表示跟随输入视频')
+      parameters.duration = duration
+    } else if (isWan27 && isR2v && videoUrl) {
+      assertDurationRange(model, duration, 2, 10, '（参考视频输入场景）')
+      parameters.duration = duration
+    } else if (isWan27) {
+      assertDurationRange(model, duration, 2, 15)
+      parameters.duration = duration
+    } else if (!isVideoEdit) {
+      parameters.duration = duration
+    }
+  }
+  if (!isVideoEdit && (isT2v || isR2v)) parameters.ratio = aspectRatio
+  if (isVideoEdit && input.size) parameters.ratio = aspectRatio
+  // prompt_extend 仅 wan2.7 文档支持；HappyHorse 过滤未知字段，避免 400。
+  if (isWan27 && input.promptEnhance !== undefined) parameters.prompt_extend = input.promptEnhance
   if (input.seed !== undefined) parameters.seed = input.seed
-  if (input.promptEnhance !== undefined && !isWan27) parameters.prompt_extend = input.promptEnhance
   if (input.watermark !== undefined) parameters.watermark = input.watermark
-  if (input.resolution && !isWan27) parameters.resolution = input.resolution
-  if (input.fps !== undefined) parameters.fps = input.fps
-  const refDataUrl = ref ? `data:${ref.mediaType};base64,${ref.base64}` : undefined
-  const refInput = ref
-    ? {
-        prompt: input.prompt,
-        img_url: refDataUrl,
-        // 新版 wan2.7/首帧图生视频使用 media 数组；旧版 i2v 只传 img_url，避免未知字段触发校验错误。
-        ...(isWan27 ? { media: [{ type: 'image', url: refDataUrl }] } : {}),
-      }
-    : undefined
+  if (input.audioSetting && isVideoEdit) parameters.audio_setting = input.audioSetting
+  const mediaInput: Record<string, unknown> = { prompt: input.prompt }
+  if (isWan27 && input.negativePrompt) mediaInput.negative_prompt = input.negativePrompt
+  if (isWan27 && isT2v && input.audioUrl) mediaInput.audio_url = input.audioUrl
+  const media: Array<Record<string, string>> = []
+  const imageRefs = references.filter((ref) => ref.mediaType.startsWith('image/'))
+  const buildImageItem = (type: string, ref: ReferenceFile) => ({ type, url: dashscopeReferenceDataUrl(ref) })
+  if (isI2v) {
+    if (videoUrl) {
+      media.push({ type: 'first_clip', url: videoUrl })
+    } else if (imageRefs[0]) {
+      media.push(buildImageItem('first_frame', imageRefs[0]))
+    }
+    if (isWan27 && input.lastFramePath) {
+      const lastFrame = readReferenceFiles([input.lastFramePath], input.cwd).find((ref) => ref.mediaType.startsWith('image/'))
+      if (!lastFrame) throw new Error('已提供 lastFrameImagePath，但没有可用图片文件')
+      media.push(buildImageItem('last_frame', lastFrame))
+    }
+    if (isWan27 && input.audioUrl) media.push({ type: 'driving_audio', url: input.audioUrl })
+  } else if (isR2v) {
+    const maxImages = isHappyHorse ? 9 : 5
+    for (const ref of imageRefs.slice(0, maxImages)) media.push(buildImageItem('reference_image', ref))
+    if (isWan27 && videoUrl) media.push({ type: 'reference_video', url: videoUrl })
+    if (isWan27 && input.audioUrl) mediaInput.reference_voice = input.audioUrl
+  } else if (isVideoEdit) {
+    media.push({ type: 'video', url: videoUrl! })
+    const maxImages = isHappyHorse ? 5 : 4
+    for (const ref of imageRefs.slice(0, maxImages)) media.push(buildImageItem('reference_image', ref))
+  }
+  if (media.length > 0) {
+    mediaInput.media = media
+  }
   const body: Record<string, unknown> = {
     model,
-    input: refInput ?? { prompt: input.prompt },
+    input: mediaInput,
     parameters,
   }
   const endpoint = `${baseUrl}/services/aigc/video-generation/video-synthesis`
@@ -3089,7 +3358,414 @@ async function callTencentHunyuanAsyncApi(
   }
 }
 
-// ===== 图片张数解析与裁剪（从 native-image-generation.ts 搬迁；其余已随 Chat 模式移除） =====
+// ===== 协议族：google-interactions（Google Veo / Gemini Omni，视频，predictLongRunning 异步） =====
+
+/** Google predictLongRunning 操作（Long-Running Operation）响应 */
+interface GoogleLroResponse {
+  /** 操作名，提交后返回；轮询时用作路径 */
+  name?: string
+  /** 是否完成 */
+  done?: boolean
+  error?: { code?: number; message?: string; status?: string }
+  response?: {
+    generateVideoResponse?: {
+      generatedSamples?: Array<{
+        video?: { uri?: string; gcsUri?: string }
+      }>
+      generatedVideos?: Array<{
+        video?: { uri?: string; gcsUri?: string }
+      }>
+    }
+  }
+}
+
+interface GoogleOmniVideoData {
+  data?: string
+  mimeType?: string
+  mime_type?: string
+  uri?: string
+  fileId?: string
+  file_id?: string
+  name?: string
+}
+
+interface GoogleOmniContentItem extends GoogleOmniVideoData {
+  type?: string
+}
+
+interface GoogleOmniInteractionResponse {
+  id?: string
+  name?: string
+  output_video?: GoogleOmniVideoData
+  outputVideo?: GoogleOmniVideoData
+  steps?: Array<{
+    content?: GoogleOmniContentItem[]
+  }>
+  error?: { code?: number; message?: string; status?: string }
+}
+
+const googleOmniInteractionHistory = new Map<string, string>()
+
+function isGoogleOmniModel(model: string): boolean {
+  return /^gemini-omni-/i.test(model)
+}
+
+/** Vertex 仅支持 Omni，不支持 Veo */
+function isVertexSupportedGoogleOmniModel(model: string): boolean {
+  return model.toLowerCase() === 'gemini-omni-flash-preview'
+}
+
+/** 轮询 headers：去掉 content-type（GET 不需要） */
+function googlePollingHeaders(headers: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === 'content-type') continue
+    result[key] = value
+  }
+  return result
+}
+
+/** 下载 headers：API Key 场景需要 x-goog-api-key；OAuth 场景签名 URL 无需 header */
+function googleMediaDownloadHeaders(
+  headers: Record<string, string>,
+  authKind: 'api-key' | 'oauth',
+): Record<string, string> {
+  if (authKind === 'api-key') return googlePollingHeaders(headers)
+  return {}
+}
+
+/** predictLongRunning 操作轮询 URL：api-key 用 /v1beta/，oauth 用 /v1/ */
+function resolveGooglePredictLongRunningPollUrl(
+  submitUrl: string,
+  operationName: string,
+  authKind: 'api-key' | 'oauth',
+): string {
+  if (/^https?:\/\//i.test(operationName)) return operationName
+  const url = new URL(submitUrl)
+  if (authKind === 'oauth') {
+    url.pathname = `/v1/${operationName.replace(/^\/+/, '')}`
+    url.search = ''
+    return url.toString()
+  }
+  url.pathname = `/v1beta/${operationName.replace(/^\/+/, '')}`
+  url.search = ''
+  return url.toString()
+}
+
+/** Omni file download URL：从 interactions URL 推导 files/:download 路径 */
+function resolveGoogleOmniFileDownloadUrl(interactionsUrl: string, fileId: string, authKind: 'api-key' | 'oauth'): string {
+  const url = new URL(interactionsUrl)
+  const escapedFileId = encodeURIComponent(fileId)
+  const interactionsIndex = url.pathname.lastIndexOf('/interactions')
+  const prefix = interactionsIndex >= 0 ? url.pathname.slice(0, interactionsIndex) : '/v1beta'
+  url.pathname = `${prefix}/files/${escapedFileId}:download`
+  url.search = 'alt=media'
+  if (authKind === 'api-key') {
+    const apiKey = new URL(interactionsUrl).searchParams.get('key')
+    if (apiKey) url.searchParams.set('key', apiKey)
+  }
+  return url.toString()
+}
+
+function normalizeVeoResolution(value?: string): '720p' | '1080p' | '4k' | undefined {
+  const text = value?.trim().toLowerCase()
+  if (!text) return undefined
+  if (/(?:^|[^a-z0-9])4k(?:[^a-z0-9]|$)|2160p|3840\s*x\s*2160|2160\s*x\s*3840/.test(text)) return '4k'
+  if (/1080p|1920\s*x\s*1080|1080\s*x\s*1920|full\s*hd|fhd/.test(text)) return '1080p'
+  if (/720p|1280\s*x\s*720|720\s*x\s*1280|hd/.test(text)) return '720p'
+  return undefined
+}
+
+function resolveVeoResolution(input: GenerateMediaInput): '720p' | '1080p' | '4k' | undefined {
+  return normalizeVeoResolution(input.resolution)
+    ?? normalizeVeoResolution(input.size)
+    ?? normalizeVeoResolution(input.prompt)
+}
+
+function resolveVeoDurationSeconds(duration: number | undefined, mustUseEightSeconds: boolean): 4 | 6 | 8 | undefined {
+  if (mustUseEightSeconds) return 8
+  if (duration === undefined) return undefined
+  if (duration <= 4) return 4
+  if (duration <= 6) return 6
+  return 8
+}
+
+function parseDurationSecondsFromText(text?: string): number | undefined {
+  const match = text?.match(/(?:^|[^\d])(\d{1,2}(?:\.\d+)?)\s*(?:秒|s|sec|secs|second|seconds)(?:[^\d]|$)/i)
+  if (!match?.[1]) return undefined
+  const value = Number.parseFloat(match[1])
+  return Number.isFinite(value) ? value : undefined
+}
+
+function resolveRequestedVeoDuration(input: GenerateMediaInput): number | undefined {
+  return input.duration ?? parseDurationSecondsFromText(input.prompt)
+}
+
+function normalizeVeoPersonGeneration(value?: string): string | undefined {
+  const text = value?.trim().toLowerCase()
+  if (!text) return undefined
+  if (['allow_all', 'allow_adult', 'dont_allow'].includes(text)) return text
+  if (/adult|成年人|成人/.test(text)) return 'allow_adult'
+  if (/all|所有|人物|人像|person|people/.test(text)) return 'allow_all'
+  if (/none|no|dont|don.?t|禁止|不要|不允许/.test(text)) return 'dont_allow'
+  return value?.trim()
+}
+
+function buildVeoMediaPart(ref: ReferenceFile): { inlineData: { mimeType: string; data: string } } {
+  return { inlineData: { mimeType: ref.mediaType, data: ref.base64 } }
+}
+
+type VeoInputKind = 'text_or_extension' | 'image_or_reference'
+
+function veoAllowedPersonGeneration(model: string, inputKind: VeoInputKind): readonly string[] {
+  // Google Veo 官方参数表：Veo 3.1/3.1 Fast/3.1 Lite/3 & 3 Fast 的人像生成取值按输入形态固定；Veo 2 更宽松。
+  // https://ai.google.dev/gemini-api/docs/veo#veo-api-parameters-and-specifications
+  const isVeo2 = /^veo-2(?:$|-)/i.test(model)
+  if (isVeo2) return inputKind === 'text_or_extension'
+    ? ['allow_all', 'allow_adult', 'dont_allow']
+    : ['allow_adult', 'dont_allow']
+  return inputKind === 'text_or_extension' ? ['allow_all'] : ['allow_adult']
+}
+
+function assertVeoPersonGenerationAllowed(model: string, personGeneration: string, inputKind: VeoInputKind): void {
+  const allowed = veoAllowedPersonGeneration(model, inputKind)
+  if (!allowed.includes(personGeneration)) {
+    const scenario = inputKind === 'text_or_extension' ? '文生视频/视频扩展' : '图生视频/插帧/参考图'
+    throw new Error(`Google Veo ${scenario} 场景下 personGeneration 仅支持 ${allowed.join(', ')}，当前传入: ${personGeneration}`)
+  }
+}
+
+function isVeoLiteModel(model: string): boolean {
+  return /(?:^|-)lite(?:-|$)/i.test(model)
+}
+
+/**
+ * Google Veo 视频生成（predictLongRunning）。
+ * Gemini Omni Flash 虽然复用 google-interactions 预设组，但走独立的 /v1beta/interactions 分支。
+ *
+ * 认证用 x-goog-api-key 头（与 Gemini Image 的 ?key= 查询参数不同）。
+ */
+async function callGoogleInteractionsVideoApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+): Promise<GenerateMediaOutput> {
+  const { baseUrl, model } = input.config
+  if (!baseUrl) throw new Error('google-interactions 缺少 baseUrl')
+  const apiKey = input.apiKey
+  if (!apiKey?.trim()) throw new Error('未配置 Google API Key 或 Vertex JSON 凭据')
+  if (isGoogleVertexJsonCredential(apiKey) && !isVertexSupportedGoogleOmniModel(model)) {
+    throw new Error('Google Cloud Service (Vertex) 视频当前仅支持 gemini-omni-flash-preview，不支持 Veo；请切换到 Google Gemini API 渠道使用 Veo')
+  }
+  if (isGoogleOmniModel(model)) return callGoogleOmniVideoApi(input, fetchFn, references)
+
+  const imageRefs = references.filter((ref) => ref.mediaType.startsWith('image/'))
+  const lastFrameRefs = input.lastFramePath ? readReferenceFiles([input.lastFramePath], input.cwd).filter((ref) => ref.mediaType.startsWith('image/')) : []
+  if (input.lastFramePath && lastFrameRefs.length === 0) throw new Error('已提供 Veo lastFrameImagePath，但没有可用图片文件')
+  const videoRefs = input.videoPath ? readReferenceFiles([input.videoPath], input.cwd).filter((ref) => ref.mediaType.startsWith('video/')) : []
+  if (input.videoPath && videoRefs.length === 0) throw new Error('已提供 Veo videoPath，但没有可用视频文件')
+  const hasVideoExtension = videoRefs.length > 0
+  const hasReferenceImages = imageRefs.length > 0 && (input.referenceMode === 'reference' || !!input.referenceType)
+  const hasLastFrame = lastFrameRefs.length > 0
+  if (hasVideoExtension && (imageRefs.length > 0 || hasLastFrame)) {
+    throw new Error('Veo 视频扩展使用 videoPath 时不能同时传 referenceImagePaths 或 lastFrameImagePath；请拆成单独的视频扩展请求')
+  }
+  if (hasLastFrame && imageRefs.length === 0) {
+    throw new Error('Veo lastFrame 必须与首帧 image/referenceImagePaths 一起使用，请同时提供 referenceImagePaths')
+  }
+  if (hasLastFrame && hasReferenceImages) {
+    throw new Error('Veo lastFrame 插帧必须使用首帧 image，不能同时使用 referenceMode=reference 或 referenceType')
+  }
+  const veoInputKind: VeoInputKind = hasVideoExtension
+    ? 'text_or_extension'
+    : (imageRefs.length > 0 || hasReferenceImages || hasLastFrame ? 'image_or_reference' : 'text_or_extension')
+
+  // 构造 instances：prompt + 可选首帧/末帧/参考图/视频扩展输入
+  const instance: Record<string, unknown> = { prompt: input.prompt }
+  if (videoRefs[0]) {
+    instance.video = buildVeoMediaPart(videoRefs[0])
+  }
+  if (imageRefs.length > 0) {
+    if (input.referenceMode === 'reference' || input.referenceType) {
+      instance.referenceImages = imageRefs.slice(0, 3).map((ref) => ({
+        image: buildVeoMediaPart(ref),
+        referenceType: input.referenceType ?? 'asset',
+      }))
+    } else {
+      instance.image = buildVeoMediaPart(imageRefs[0]!)
+    }
+  }
+  if (lastFrameRefs[0]) {
+    instance.lastFrame = buildVeoMediaPart(lastFrameRefs[0])
+  }
+
+  // parameters：Veo 官方字段。duration 会归一到 4/6/8 秒；1080p/4k 按官方限制强制 8 秒。
+  const size = resolveRequestedSize(input) || input.config.preset?.defaultSize || '16:9'
+  const aspectRatio = sizeToAspectRatio(size) ?? '16:9'
+  let resolution = resolveVeoResolution(input)
+  if (resolution === '4k' && isVeoLiteModel(model)) {
+    throw new Error('Veo 3.1 Lite 不支持 4k 分辨率，请改用 720p/1080p 或切换到 Veo 3.1 / Veo 3.1 Fast')
+  }
+  if (hasVideoExtension && resolution && resolution !== '720p') {
+    throw new Error('Veo 视频扩展仅支持 720p 分辨率，请把 resolution 设为 720p')
+  }
+  if (hasVideoExtension && !resolution) resolution = '720p'
+  const requestedVideoCount = input.numberOfImages ?? 1
+  if (requestedVideoCount !== 1) {
+    throw new Error('Veo 当前每次请求只支持生成 1 条视频，请把 numberOfVideos 设为 1')
+  }
+  const mustUseEightSeconds = resolution === '1080p' || resolution === '4k' || hasVideoExtension || hasReferenceImages || hasLastFrame
+  const durationSeconds = resolveVeoDurationSeconds(resolveRequestedVeoDuration(input), mustUseEightSeconds)
+  const parameters: Record<string, unknown> = { aspectRatio }
+  if (input.numberOfImages !== undefined) parameters.numberOfVideos = requestedVideoCount
+  if (durationSeconds !== undefined) parameters.durationSeconds = durationSeconds
+  if (resolution) parameters.resolution = resolution
+  if (input.seed !== undefined) parameters.seed = input.seed
+  const personGeneration = normalizeVeoPersonGeneration(input.personGeneration)
+  if (personGeneration) {
+    assertVeoPersonGenerationAllowed(model, personGeneration, veoInputKind)
+    parameters.personGeneration = personGeneration
+  }
+
+  const submitBody = { instances: [instance], parameters }
+  const target = await buildGooglePredictLongRunningRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model })
+  const submitRes = await fetchFn(target.url, {
+    method: 'POST',
+    headers: target.headers,
+    body: JSON.stringify(submitBody),
+    ...(input.signal ? { signal: input.signal } : {}),
+  })
+  if (!submitRes.ok) {
+    const text = await submitRes.text().catch(() => '')
+    throw new Error(`Google 视频提交失败 (${submitRes.status}): ${text.slice(0, 300)}`)
+  }
+  const submitBodyJson = (await safeParseJson(submitRes, 'Google 视频提交')) as GoogleLroResponse
+  const operationName = submitBodyJson.name
+  if (!operationName) throw new Error('Google 视频提交未返回 operation name')
+
+  // 轮询 operation 直到 done === true
+  const pollUrl = resolveGooglePredictLongRunningPollUrl(target.url, operationName, target.authKind)
+  const pollHeaders = googlePollingHeaders(target.headers)
+  const downloadHeaders = googleMediaDownloadHeaders(target.headers, target.authKind)
+  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
+  for (;;) {
+    if (Date.now() > deadline) throw new Error(`Google 视频轮询超时（${VIDEO_POLL_TIMEOUT_MS / 1000}s）: ${operationName}`)
+    if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
+    const res = await fetchFn(pollUrl, {
+      method: 'GET',
+      headers: pollHeaders,
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Google 视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
+    }
+    const body = (await safeParseJson(res, 'Google 视频查询')) as GoogleLroResponse
+    if (body.done) {
+      if (body.error) throw new Error(`Google 视频生成失败: ${body.error.message ?? body.error.status ?? '未知错误'}`)
+      const videoUri = body.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri
+        ?? body.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.gcsUri
+        ?? body.response?.generateVideoResponse?.generatedVideos?.[0]?.video?.uri
+        ?? body.response?.generateVideoResponse?.generatedVideos?.[0]?.video?.gcsUri
+      if (!videoUri) throw new Error('Google 视频生成成功但未返回视频 URI')
+      return { images: [await downloadAsBase64(videoUri, fetchFn, input.signal, 'video/mp4', downloadHeaders)] }
+    }
+  }
+}
+
+function extractGoogleOmniFileId(value: GoogleOmniVideoData): string | undefined {
+  const raw = value.fileId ?? value.file_id ?? value.name ?? value.uri
+  if (!raw) return undefined
+  const match = raw.match(/(?:^|\/)files\/([^/:?#]+)/)
+  return match?.[1] ?? raw.replace(/^files\//, '')
+}
+
+function collectGoogleOmniVideos(body: GoogleOmniInteractionResponse): GoogleOmniVideoData[] {
+  const videos: GoogleOmniVideoData[] = []
+  if (body.output_video) videos.push(body.output_video)
+  if (body.outputVideo) videos.push(body.outputVideo)
+  for (const step of body.steps ?? []) {
+    for (const item of step.content ?? []) {
+      const mediaType = item.mimeType ?? item.mime_type
+      if (item.type === 'video' || mediaType?.startsWith('video/')) {
+        videos.push(item)
+      }
+    }
+  }
+  return videos
+}
+
+function buildGoogleOmniInput(prompt: string, references: ReferenceFile[]): unknown {
+  if (references.length === 0) return prompt
+  return [
+    ...references.map((ref) => ({
+      type: 'image',
+      mime_type: ref.mediaType,
+      data: ref.base64,
+    })),
+    { type: 'text', text: prompt },
+  ]
+}
+
+async function callGoogleOmniVideoApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+): Promise<GenerateMediaOutput> {
+  const { baseUrl, model } = input.config
+  if (!baseUrl) throw new Error('google-interactions 缺少 baseUrl')
+  const apiKey = input.apiKey
+  if (!apiKey?.trim()) throw new Error('未配置 Google API Key 或 Vertex JSON 凭据')
+  if (isGoogleVertexJsonCredential(apiKey) && !isVertexSupportedGoogleOmniModel(model)) {
+    throw new Error('Google Cloud Service (Vertex) 视频当前仅支持 gemini-omni-flash-preview')
+  }
+
+  const sessionId = input.sessionId ?? 'google-omni'
+  const requestBody: Record<string, unknown> = {
+    model,
+    input: buildGoogleOmniInput(input.prompt, references),
+  }
+  const previousInteractionId = googleOmniInteractionHistory.get(sessionId)
+  if (previousInteractionId) requestBody.previous_interaction_id = previousInteractionId
+
+  const target = await buildGoogleInteractionsRequestTarget({ rawCredential: apiKey, baseUrl })
+  const res = await fetchFn(target.url, {
+    method: 'POST',
+    headers: target.headers,
+    body: JSON.stringify(requestBody),
+    ...(input.signal ? { signal: input.signal } : {}),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Google Omni 视频提交失败 (${res.status}): ${text.slice(0, 300)}`)
+  }
+  const body = (await safeParseJson(res, 'Google Omni 视频')) as GoogleOmniInteractionResponse
+  if (body.error) throw new Error(`Google Omni 视频生成失败: ${body.error.message ?? body.error.status ?? '未知错误'}`)
+
+  const interactionId = body.id ?? body.name
+  if (interactionId) googleOmniInteractionHistory.set(sessionId, interactionId)
+
+  const outputs = collectGoogleOmniVideos(body)
+  const videos: GeneratedImageData[] = []
+  for (const item of outputs) {
+    const mediaType = item.mimeType ?? item.mime_type ?? 'video/mp4'
+    if (item.data) {
+      videos.push({ mediaType, data: item.data })
+      continue
+    }
+    if (item.uri && /^https?:\/\//i.test(item.uri)) {
+      videos.push(await downloadAsBase64(item.uri, fetchFn, input.signal, mediaType, googleMediaDownloadHeaders(target.headers, target.authKind)))
+      continue
+    }
+    const fileId = extractGoogleOmniFileId(item)
+    if (fileId) {
+      const downloadUrl = resolveGoogleOmniFileDownloadUrl(target.url, fileId, target.authKind)
+      videos.push(await downloadAsBase64(downloadUrl, fetchFn, input.signal, mediaType, googlePollingHeaders(target.headers)))
+    }
+  }
+  if (videos.length === 0) throw new Error('Google Omni 视频成功但未返回视频内容')
+  return { images: videos }
+}
 
 const CHINESE_COUNT_VALUES: Record<string, number> = {
   一: 1, 二: 2, 两: 2, 俩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
