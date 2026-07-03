@@ -3,8 +3,16 @@
   "version": "0.1.0",
   "description": "独立多模态生成 MCP Server：图像 / 视频 / 音频一键生成，兼容国内外主流模型，内嵌 WebUI 配置与试用台。",
   "license": "MIT",
-  "author": "",
+  "author": "Jacky Huang",
   "type": "module",
+  "homepage": "https://github.com/RunhuaHuang/duo-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RunhuaHuang/duo-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RunhuaHuang/duo-mcp/issues"
+  },
   "bin": {
     "duo-mcp": "dist/index.js"
   },
@@ -20,7 +28,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "test": "bun test",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -41,11 +50,27 @@
     "video-generation",
     "tts",
     "audio-generation",
+    "text-to-speech",
+    "music-generation",
+    "voice-clone",
+    "openai",
+    "gemini",
+    "nano-banana",
+    "veo",
+    "seedream",
+    "seedance",
+    "cogvideo",
+    "cogview",
+    "cosyvoice",
     "dashscope",
     "qwen",
-    "cosyvoice",
     "minimax",
-    "claude",
+    "kling",
+    "midjourney",
+    "claude-desktop",
+    "cursor",
+    "cline",
+    "webui",
     "ai"
   ]
 }
