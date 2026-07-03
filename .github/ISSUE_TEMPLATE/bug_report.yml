@@ -1,0 +1,79 @@
+name: 🐛 Bug 报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量填全以下信息，能大幅缩短定位时间。
+        如果是安全漏洞，请走 [Security Advisory](https://github.com/RunhuaHuang/duo-mcp/security/advisories/new)，不要在 issue 公开。
+
+  - type: input
+    id: version
+    attributes:
+      label: Duo-MCP 版本
+      placeholder: "0.1.0（运行 `npx duo-mcp --help` 看不到版本时，跑 `npm view duo-mcp version`）"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js 版本与操作系统
+      placeholder: "Node 20.11 / macOS 14 / Windows 11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: modality
+    attributes:
+      label: 出问题的模态
+      options:
+        - 图像 (generate_image)
+        - 视频 (generate_video)
+        - 音频 (generate_audio)
+        - WebUI（--webui）
+        - MCP 接入 / agent 集成
+        - 其它
+    validations:
+      required: true
+
+  - type: input
+    id: preset
+    attributes:
+      label: 使用的预设（厂商 / 模型）
+      placeholder: "例如 openai-gpt-image-2 / gemini-flash-image / doubao-seedream-5"
+    validations:
+      required: true
+
+  - type: input
+    id: agent
+    attributes:
+      label: 接入的 agent
+      placeholder: "Claude Desktop / Cursor / Cline / 通用 stdio"
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 预期行为 vs 实际行为。复现步骤越细越好。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息 / 日志
+      description: 贴 stderr 输出或 agent 报错。**请先抹掉 API Key / 服务账号 JSON 等敏感信息！**
+      render: shell
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现步骤
+      placeholder: |
+        1. 启动 `npx duo-mcp --webui`
+        2. 配置 xxx 模态，选 xxx 预设
+        3. 在试用台 / agent 里输入 xxx
+        4. 看到 xxx
