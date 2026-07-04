@@ -500,14 +500,15 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
 
 /** 计算启动命令（优先 npx，回退 node + 本包路径） */
 function buildStartCommand(): string {
-  return `npx -y prismstudio`
+  return `npx -y prismstudio@latest`
 }
 
 function exportAgentConfig(agent: string): { agent: string; config: unknown; note: string } {
   const cmd = buildStartCommand()
   const serverEntry = {
     command: 'npx',
-    args: ['-y', 'prismstudio'],
+    args: ['-y', 'prismstudio@latest'],
+    timeoutMs: 600000,
   }
 
   switch (agent) {
@@ -552,7 +553,8 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         note: `通用 stdio 命令：${cmd}`,
         config: {
           command: 'npx',
-          args: ['-y', 'prismstudio'],
+          args: ['-y', 'prismstudio@latest'],
+          timeoutMs: 600000,
         },
       }
   }

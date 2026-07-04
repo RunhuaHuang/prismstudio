@@ -212,7 +212,8 @@ npx -y prismstudio@latest webui
   "mcpServers": {
     "prismstudio": {
       "command": "npx",
-      "args": ["-y", "prismstudio@latest"]
+      "args": ["-y", "prismstudio@latest"],
+      "timeoutMs": 600000
     }
   }
 }
@@ -220,7 +221,9 @@ npx -y prismstudio@latest webui
 
 保存 MCP 配置后，**请重启 Claude Desktop / Cursor / Cline / Windsurf 等 agent**，让它重新加载 MCP server。重启后，就能在对话中让 agent 生成图片、视频、音频了。
 
-> 如果你的 agent 提供“表单 / JSON”切换，请选择 **JSON** 格式，把 WebUI 接入向导复制出的 JSON 粘贴进去。
+> `timeoutMs: 600000` 表示让 agent 最多等待 10 分钟，推荐保留，避免视频 / 音乐等长任务被客户端 30 秒默认超时提前切断。如果你的 agent 不支持这个字段并报错，删除这一行即可。
+>
+> 如果你的 agent 提供“表单 / JSON”切换，请选择 **JSON** 格式，把 WebUI 接入向导复制出的 JSON 粘贴进去；如果表单里要求填写类型（type），请选择 `stdio`。
 
 <p align="center">
   <strong>MCP 配置填写提示</strong> · 选择 JSON 格式后粘贴配置<br/>
@@ -234,7 +237,7 @@ npx -y prismstudio@latest webui
 ```json
 {
   "mcpServers": {
-    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio@latest"] }
+    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio@latest"], "timeoutMs": 600000 }
   }
 }
 ```
