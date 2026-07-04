@@ -168,13 +168,21 @@ winget install OpenJS.NodeJS.LTS
 
 ## 快速开始
 
-### 第 1 步：启动 WebUI 完成配置（推荐首次使用）
+### 第 1 步：按需打开 WebUI 完成配置（推荐首次使用）
 
 ```bash
-npx prismstudio --webui
+npx -y prismstudio@latest webui
 ```
 
-浏览器会自动打开 `http://127.0.0.1:17899`，在页面里：
+浏览器会自动打开 `http://127.0.0.1:17899`。WebUI 是**按需配置面板，不是常驻服务**：
+
+- 只有这条命令运行时才会占用 `17899` 端口
+- 关掉终端或按 `Ctrl+C` 后，WebUI 会停止，不再占用电脑内存 / CPU
+- 配置会保存到本地 `~/.prismstudio/config.json`，不会因为 WebUI 关闭而丢失
+- 以后需要换模型、改 API Key、测试生成时，再运行同一条命令打开即可
+- 设置好一次后，日常在 agent 里生成图片 / 视频 / 音频**不需要 WebUI 常驻**
+
+在页面里：
 
 1. **配置台**：为想用的模态（图片/视频/音频）选择预设模型、填写 API Key，点保存
 2. **试用台**：直接生成一张图 / 一段 TTS 验证配置是否生效
@@ -204,13 +212,20 @@ npx prismstudio --webui
   "mcpServers": {
     "prismstudio": {
       "command": "npx",
-      "args": ["-y", "prismstudio"]
+      "args": ["-y", "prismstudio@latest"]
     }
   }
 }
 ```
 
-重启 Claude Desktop 后，就能在对话中让 Claude 生成图片、视频、音频了。
+保存 MCP 配置后，**请重启 Claude Desktop / Cursor / Cline / Windsurf 等 agent**，让它重新加载 MCP server。重启后，就能在对话中让 agent 生成图片、视频、音频了。
+
+> 如果你的 agent 提供“表单 / JSON”切换，请选择 **JSON** 格式，把 WebUI 接入向导复制出的 JSON 粘贴进去。
+
+<p align="center">
+  <strong>MCP 配置填写提示</strong> · 选择 JSON 格式后粘贴配置<br/>
+  <img src="figures/mcp-json-format-guide.png" alt="MCP 配置选择 JSON 格式指引" width="90%">
+</p>
 
 <details>
 <summary><b>其他 agent 配置</b></summary>
@@ -219,14 +234,14 @@ npx prismstudio --webui
 ```json
 {
   "mcpServers": {
-    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio"] }
+    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio@latest"] }
   }
 }
 ```
 
 **Cline / Windsurf / VS Code**：同上结构，写入对应 MCP 配置位置即可。
 
-**通用 stdio**：直接运行 `npx -y prismstudio`，通过标准输入输出交互。
+**通用 stdio**：直接运行 `npx -y prismstudio@latest`，通过标准输入输出交互。
 
 </details>
 
@@ -236,6 +251,7 @@ npx prismstudio --webui
 
 ```bash
 prismstudio                       # 以 stdio MCP 模式运行（默认，供 agent 调用）
+prismstudio webui                 # 启动本地 WebUI 配置台（等价于 --webui）
 prismstudio --webui               # 启动本地 WebUI 配置台（浏览器打开 127.0.0.1:<port>）
 prismstudio --webui --port 8080   # 指定 WebUI 端口（默认 17899）
 prismstudio --output-dir <path>   # 覆盖生成物输出目录

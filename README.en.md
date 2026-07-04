@@ -168,13 +168,21 @@ After installation, reopen Terminal / PowerShell and run `node -v`, `npm -v`, an
 
 ## Quick Start
 
-### Step 1 — Launch the WebUI to configure (recommended for first use)
+### Step 1 — Open the WebUI when you need to configure (recommended for first use)
 
 ```bash
-npx prismstudio --webui
+npx -y prismstudio@latest webui
 ```
 
-Your browser opens at `http://127.0.0.1:17899`. There you can:
+Your browser opens at `http://127.0.0.1:17899`. The WebUI is an **on-demand configuration panel, not a resident background service**:
+
+- It only occupies port `17899` while this command is running
+- When you close the terminal or press `Ctrl+C`, the WebUI stops and no longer uses memory / CPU
+- Your settings are saved locally in `~/.prismstudio/config.json` and are not lost when the WebUI stops
+- Run the same command again whenever you need to switch models, update API keys, or test generation
+- After the initial setup, daily image / video / audio generation from your agent **does not require the WebUI to stay open**
+
+There you can:
 
 1. **Config console**: pick a preset model and enter your API key for each modality (image/video/audio) you want, then save
 2. **Playground**: generate an image / a TTS clip to verify your setup
@@ -204,13 +212,20 @@ For Claude Desktop, edit the config (macOS: `~/Library/Application Support/Claud
   "mcpServers": {
     "prismstudio": {
       "command": "npx",
-      "args": ["-y", "prismstudio"]
+      "args": ["-y", "prismstudio@latest"]
     }
   }
 }
 ```
 
-Restart Claude Desktop, then ask Claude to generate images, video, or audio right in the chat.
+After saving the MCP config, **restart Claude Desktop / Cursor / Cline / Windsurf or your agent** so it reloads the MCP server. Then ask the agent to generate images, video, or audio right in the chat.
+
+> If your agent offers a “Form / JSON” switch, choose **JSON** and paste the JSON copied from the WebUI wiring wizard.
+
+<p align="center">
+  <strong>MCP config tip</strong> · choose JSON format, then paste the config<br/>
+  <img src="figures/mcp-json-format-guide.png" alt="MCP config JSON format guide" width="90%">
+</p>
 
 <details>
 <summary><b>Other agent configs</b></summary>
@@ -219,14 +234,14 @@ Restart Claude Desktop, then ask Claude to generate images, video, or audio righ
 ```json
 {
   "mcpServers": {
-    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio"] }
+    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio@latest"] }
   }
 }
 ```
 
 **Cline / Windsurf / VS Code**: same structure, written to the agent's MCP config location.
 
-**Generic stdio**: run `npx -y prismstudio` directly and interact over stdin/stdout.
+**Generic stdio**: run `npx -y prismstudio@latest` directly and interact over stdin/stdout.
 
 </details>
 
@@ -236,6 +251,7 @@ Restart Claude Desktop, then ask Claude to generate images, video, or audio righ
 
 ```bash
 prismstudio                       # Run as a stdio MCP server (default, for agents)
+prismstudio webui                 # Launch the local WebUI console (same as --webui)
 prismstudio --webui               # Launch the local WebUI console (opens 127.0.0.1:<port>)
 prismstudio --webui --port 8080   # Custom WebUI port (default 17899)
 prismstudio --output-dir <path>   # Override the generated-media output directory
