@@ -9,7 +9,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +41,18 @@ jobs:
             exit 1
           fi
 
+      - name: Extract release notes
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          awk -v version="$PKG_VERSION" '
+            $0 ~ "^## \\[" version "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture && /^---$/ { next }
+            capture { print }
+          ' CHANGELOG.md | sed '/^$/N;/^\n$/D' > release-notes.md
+          test -s release-notes.md
+          cat release-notes.md
+
       - name: Typecheck
         run: bun run typecheck
 
@@ -70,3 +82,8 @@ jobs:
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
