@@ -231,13 +231,18 @@ function maskApiKey(key: string): string {
 }
 
 /** 配置脱敏后返回给前端（避免把完整 key 明文回传给浏览器）。
- *  顶层 apiKey 与 apiKeyByPreset map 内的 key 都脱敏。 */
+ *  顶层 apiKey、apiKeyByVendor 与 apiKeyByPreset map 内的 key 都脱敏。 */
 function sanitizeConfig(config: DuoConfig): DuoConfig {
   const out: DuoConfig = { ...config }
   for (const m of ['image', 'video', 'audio'] as const) {
     const mod = config[m]
     if (mod) {
       const masked: ModalityConfig = { ...mod, apiKey: maskApiKey(mod.apiKey) }
+      if (mod.apiKeyByVendor) {
+        masked.apiKeyByVendor = Object.fromEntries(
+          Object.entries(mod.apiKeyByVendor).map(([vendor, k]) => [vendor, maskApiKey(k)]),
+        )
+      }
       if (mod.apiKeyByPreset) {
         masked.apiKeyByPreset = Object.fromEntries(
           Object.entries(mod.apiKeyByPreset).map(([pid, k]) => [pid, maskApiKey(k)]),
@@ -333,9 +338,9 @@ async function handleApi(
 /**
  * 合并配置：前端回传的 apiKey 若含 ****（脱敏标记），保留原 config 中的真实值。
  * 空字符串视为用户主动清空，允许清空（修复「无法删除已存 key」）。
- * apiKeyByPreset map 同理：含 **** 的条目保留原值，否则用前端回传值（含清空）。
+ * apiKeyByVendor / apiKeyByPreset map 同理：含 **** 的条目保留原值，否则用前端回传值（含清空）。
  */
-function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: DuoConfig): DuoConfig {
+export function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: DuoConfig): DuoConfig {
   const merged: DuoConfig = { ...incoming }
   for (const m of ['image', 'video', 'audio'] as const) {
     const inc = incoming[m]
@@ -344,19 +349,55 @@ function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: DuoConfig
     const fixed: ModalityConfig = { ...inc }
     // 顶层 apiKey：脱敏占位保留原值；否则用前端值（含空字符串=清空）
     if (inc.apiKey?.includes('****')) {
-      fixed.apiKey = cur.apiKey
+      fixed.apiKey = resolveMaskedStoredApiKey(m, cur, inc) || cur.apiKey || ''
     }
-    // apiKeyByPreset：以原值为基底，前端非脱敏值覆盖（含清空）
-    if (cur.apiKeyByPreset || inc.apiKeyByPreset) {
-      const mergedByPreset: Record<string, string> = { ...(cur.apiKeyByPreset || {}) }
-      for (const [pid, k] of Object.entries(inc.apiKeyByPreset || {})) {
-        if (!k.includes('****')) mergedByPreset[pid] = k
-      }
-      fixed.apiKeyByPreset = mergedByPreset
-    }
+    fixed.apiKeyByVendor = mergeMaskedStringMap(cur.apiKeyByVendor, inc.apiKeyByVendor)
+    fixed.apiKeyByPreset = mergeMaskedStringMap(cur.apiKeyByPreset, inc.apiKeyByPreset)
     merged[m] = fixed
   }
   return merged
+}
+
+function mergeMaskedStringMap(
+  current: Record<string, string> | undefined,
+  incoming: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!current && !incoming) return undefined
+  const merged: Record<string, string> = { ...(current || {}) }
+  for (const [key, value] of Object.entries(incoming || {})) {
+    if (!value.includes('****')) merged[key] = value
+  }
+  return merged
+}
+
+function vendorKeyForPreset(modality: MediaModality, presetId: string | undefined): string {
+  if (!presetId) return ''
+  const preset = MEDIA_MODEL_PRESETS.find((p) => p.modality === modality && p.id === presetId)
+  return preset?.vendor || (presetId === 'custom' ? 'custom' : presetId)
+}
+
+function resolveMaskedStoredApiKey(
+  modality: MediaModality,
+  current: ModalityConfig,
+  incoming: ModalityConfig,
+): string | undefined {
+  const presetId = incoming.presetId
+  const vendorKey = vendorKeyForPreset(modality, presetId)
+  if (
+    vendorKey
+    && incoming.apiKeyByVendor?.[vendorKey]?.includes('****')
+    && current.apiKeyByVendor?.[vendorKey]?.trim()
+  ) {
+    return current.apiKeyByVendor[vendorKey]
+  }
+  if (
+    presetId
+    && incoming.apiKeyByPreset?.[presetId]?.includes('****')
+    && current.apiKeyByPreset?.[presetId]?.trim()
+  ) {
+    return current.apiKeyByPreset[presetId]
+  }
+  return undefined
 }
 
 // ===== 试用台生成 =====

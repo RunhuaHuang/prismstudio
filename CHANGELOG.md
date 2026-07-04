@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-07-04
+
+### Fixed
+- WebUI API Key 记忆改为同一模态内按 vendor 共享：同一厂商下切换不同图片 / 视频 / 音频模型不再要求重复输入 API Key。
+- 保留并自动迁移旧的 `apiKeyByPreset` 记忆，避免已有用户配置丢失。
+
 ## [0.1.1] — 2026-07-04
 
 ### Added
@@ -47,6 +53,7 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/RunhuaHuang/prismstudio/releases/tag/v0.1.0

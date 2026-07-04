@@ -44,8 +44,13 @@ export interface ModalityConfig {
   /** 可选：音频子任务（仅 audio 模态） */
   audioTask?: 'tts' | 'music' | 'clone'
   /**
-   * 各渠道（presetId）单独记忆的 API Key。切换 preset 时 WebUI 据此保存/恢复，
-   * 让用户在不同厂商间切换无需重填 key。key 为 presetId，value 为该渠道的 apiKey。
+   * 各厂商（vendor）单独记忆的 API Key。WebUI 在同一模态内切换同 vendor 的模型时
+   * 复用同一个 key；image/video/audio 三个模态各自独立，不跨模态共享。
+   */
+  apiKeyByVendor?: Record<string, string>
+  /**
+   * 历史兼容字段：旧版本按 presetId 单独记忆 API Key。新版本仍会读写该字段，
+   * 以便从旧配置迁移，并兼容依赖该字段的旧逻辑。
    */
   apiKeyByPreset?: Record<string, string>
 }

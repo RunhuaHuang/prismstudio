@@ -1063,7 +1063,9 @@ function prismApp() {
 
     async init() {
       this.applyTheme();
-      await Promise.all([this.loadConfig(), this.loadPresets(), this.loadStatus()]);
+      // 先加载 presets，后续按 vendor 共享 API Key 需要用 presetId 反查 vendor。
+      await this.loadPresets();
+      await Promise.all([this.loadConfig(), this.loadStatus()]);
       this.loadExport();
       // 配置载入完成后，开启自动保存监听。loadConfig 末尾把 _loaded 置 true。
       // 监听每个模态的关键字段 + outputDir，任一变化即 debounce 自动保存。
@@ -1083,14 +1085,15 @@ function prismApp() {
       const r = await fetch('/api/config'); this.config = await r.json();
       for (const k of ['image','video','audio']) {
         if (!this.config[k]) this.config[k] = {enabled:false, presetId:'', apiKey:''};
-        // 确保 byPreset map 存在
+        // 确保 key 记忆 map 存在：byVendor 是新逻辑，byPreset 是历史兼容字段。
+        if (!this.config[k].apiKeyByVendor) this.config[k].apiKeyByVendor = {};
         if (!this.config[k].apiKeyByPreset) this.config[k].apiKeyByPreset = {};
         // 记录初始 preset 到内存（不存 config.json，避免污染配置文件）
         this._lastPreset[k] = this.config[k].presetId;
-        // 注意：GET 返回的顶层 apiKey 与 byPreset 都是脱敏占位（含 ****）。
-        // 仅当 byPreset 里有真实（非脱敏）值时，用它覆盖顶层；否则保留脱敏占位（用户重填时再存）。
+        // 注意：GET 返回的顶层 apiKey 与 map 都是脱敏占位（含 ****）。
+        // 仅当记忆 map 里有真实（非脱敏）值时，用它覆盖顶层；否则保留脱敏占位（用户重填时再存）。
         const pid = this.config[k].presetId;
-        const remembered = this.config[k].apiKeyByPreset[pid];
+        const remembered = this.rememberedApiKeyForPreset(k, pid);
         if (pid && remembered && !remembered.includes('****') && this.config[k].apiKey.includes('****')) {
           this.config[k].apiKey = remembered;
         }
@@ -1106,13 +1109,9 @@ function prismApp() {
     },
     async saveConfig() {
       this.saving = true; this.saveMsg = ''; this.saveErr = false;
-      // 保存前：把每个模态当前顶层 apiKey 同步进 apiKeyByPreset（避免未切换就改的 key 丢失）
+      // 保存前：把每个模态当前顶层 apiKey 同步进 vendor/preset 记忆（避免未切换就改的 key 丢失）
       for (const k of ['image','video','audio']) {
-        const mod = this.config[k];
-        if (mod && mod.presetId && mod.apiKey && !mod.apiKey.includes('****')) {
-          if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
-          mod.apiKeyByPreset[mod.presetId] = mod.apiKey;
-        }
+        this.rememberCurrentApiKey(k);
       }
       try {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
@@ -1140,13 +1139,9 @@ function prismApp() {
       this._autoSaveTimer = setTimeout(() => this.silentSave(), 800);
     },
     async silentSave() {
-      // 复用 saveConfig 的 apiKeyByPreset 同步逻辑，但不设 saving 状态、成功不弹 toast
+      // 复用 saveConfig 的 key 记忆同步逻辑，但不设 saving 状态、成功不弹 toast
       for (const k of ['image','video','audio']) {
-        const mod = this.config[k];
-        if (mod && mod.presetId && mod.apiKey && !mod.apiKey.includes('****')) {
-          if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
-          mod.apiKeyByPreset[mod.presetId] = mod.apiKey;
-        }
+        this.rememberCurrentApiKey(k);
       }
       try {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
@@ -1167,20 +1162,21 @@ function prismApp() {
     },
     onPresetChange(key) {
       const mod = this.config[key];
+      if (!mod.apiKeyByVendor) mod.apiKeyByVendor = {};
       if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
       // 注意：onPresetChange 在 config[key].presetId 已被 dropdown 更新为新值后触发，
       // 故靠 _lastPreset[key] 记录切换前的 presetId 来保存旧 key。
       const newPresetId = mod.presetId;
       const oldPresetId = this._lastPreset[key];
-      // 保存旧 preset 的 key（仅当非脱敏占位时，避免把 **** 存进 map）
-      if (oldPresetId && oldPresetId !== newPresetId && mod.apiKey && !mod.apiKey.includes('****')) {
-        mod.apiKeyByPreset[oldPresetId] = mod.apiKey;
+      // 保存旧 preset/vendor 的 key（仅当非脱敏占位时，避免把 **** 存进 map）
+      if (oldPresetId && oldPresetId !== newPresetId) {
+        this.rememberCurrentApiKey(key, oldPresetId);
       }
-      // 恢复新 preset 的 key（若有记忆且非脱敏则用记忆值；
+      // 恢复新 preset 的 key：同一模态内优先按 vendor 共享，找不到再回退旧版 preset 记忆。
       // 若记忆值含 ****（服务器侧有 key），保留脱敏占位以免被 mergeConfig 当作清空；
       // 否则清空让用户填写）
       if (newPresetId !== oldPresetId) {
-        const remembered = mod.apiKeyByPreset[newPresetId];
+        const remembered = this.rememberedApiKeyForPreset(key, newPresetId);
         mod.apiKey = remembered || '';
       }
       this._lastPreset[key] = newPresetId;
@@ -1188,6 +1184,34 @@ function prismApp() {
       if (newPresetId === 'custom') return;
       const p = (this.presets[key] || []).find(x => x.id === newPresetId);
       if (p) { mod.model = p.model; mod.protocol = p.protocol; }
+    },
+    vendorKeyForPreset(key, presetId) {
+      if (!presetId) return '';
+      const p = (this.presets[key] || []).find(x => x.id === presetId);
+      return p ? p.vendor : (presetId === 'custom' ? 'custom' : presetId);
+    },
+    rememberCurrentApiKey(key, presetIdOverride) {
+      const mod = this.config[key];
+      const presetId = presetIdOverride || mod?.presetId;
+      if (!mod || !presetId || !mod.apiKey || mod.apiKey.includes('****')) return;
+      if (!mod.apiKeyByVendor) mod.apiKeyByVendor = {};
+      if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
+      const vendorKey = this.vendorKeyForPreset(key, presetId);
+      if (vendorKey) mod.apiKeyByVendor[vendorKey] = mod.apiKey;
+      mod.apiKeyByPreset[presetId] = mod.apiKey; // 兼容旧配置 / 旧引擎回退
+    },
+    rememberedApiKeyForPreset(key, presetId) {
+      const mod = this.config[key];
+      if (!mod || !presetId) return '';
+      if (!mod.apiKeyByVendor) mod.apiKeyByVendor = {};
+      if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
+      const vendorKey = this.vendorKeyForPreset(key, presetId);
+      const byVendor = vendorKey ? mod.apiKeyByVendor[vendorKey] : '';
+      if (byVendor) return byVendor;
+      const byPreset = mod.apiKeyByPreset[presetId] || '';
+      // 旧配置迁移：若旧 preset 记忆里有真实 key，顺手写入 vendor 记忆。
+      if (byPreset && !byPreset.includes('****') && vendorKey) mod.apiKeyByVendor[vendorKey] = byPreset;
+      return byPreset;
     },
     presetHelp(key) {
       const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);

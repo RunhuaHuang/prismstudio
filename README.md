@@ -289,7 +289,7 @@ prismstudio --help                # 显示帮助
 }
 ```
 
-> **多渠道 Key 记忆**：每个模态按预设（渠道）单独记忆 API Key（存在 `apiKeyByPreset`）。切换厂商时无需重填，切回来自动恢复。
+> **同厂商 Key 记忆**：每个模态按厂商（vendor）单独记忆 API Key（存在 `apiKeyByVendor`，并兼容旧的 `apiKeyByPreset`）。同一模态内切换同厂商模型无需重填；图片 / 视频 / 音频三类工具之间不强制共用。
 
 > **安全说明**：凭证以明文存储（与 MCP 生态惯例一致）。WebUI 仅绑定 `127.0.0.1`，不加载第三方 CDN 脚本/字体，并通过安全响应头、Origin / Sec-Fetch-Site 校验与 JSON Content-Type 校验降低本机跨站请求风险。生产环境请自行做好文件权限管控。详见 [SECURITY.md](SECURITY.md)。
 

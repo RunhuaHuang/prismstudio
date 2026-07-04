@@ -289,7 +289,7 @@ Located at `~/.prismstudio/config.json` (override with `PRISMSTUDIO_CONFIG`):
 }
 ```
 
-> **Per-vendor key memory**: each modality remembers the API key per preset (stored in `apiKeyByPreset`). Switching vendors never requires re-entering; switching back restores automatically.
+> **Per-vendor key memory**: each modality remembers API keys by vendor (stored in `apiKeyByVendor`, with backward compatibility for `apiKeyByPreset`). Switching models under the same vendor within one modality does not require re-entering the key; image / video / audio do not have to share keys.
 
 > **Security**: credentials are stored in plaintext (consistent with MCP ecosystem convention). The WebUI binds only to `127.0.0.1`, loads no third-party CDN scripts/fonts, and uses security headers plus Origin / Sec-Fetch-Site / JSON Content-Type checks to reduce local cross-site request risk. Manage file permissions yourself in production. See [SECURITY.md](SECURITY.md).
 
