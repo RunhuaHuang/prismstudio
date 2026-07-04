@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-07-04
+
+### Fixed
+- MiniMax 音乐生成使用独立 5 分钟内部超时，不再复用调用方短超时 signal，避免 `music-2.6` / `music-cover` 等 30–120 秒长耗时任务在 30 秒左右被中断导致文件无法保存。
+
+### Changed
+- 三个生成工具的内部等待窗口统一放宽：图片轮询 5 分钟、视频轮询 10 分钟、音频长任务 5 分钟。
+
 ## [0.1.2] — 2026-07-04
 
 ### Fixed
@@ -53,7 +61,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/RunhuaHuang/prismstudio/releases/tag/v0.1.0

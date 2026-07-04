@@ -896,6 +896,26 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
+function createInternalTimeoutSignal(timeoutMs: number): {
+  signal: AbortSignal
+  clear: () => void
+  timedOut: () => boolean
+} {
+  const controller = new AbortController()
+  let didTimeout = false
+  const timer = setTimeout(() => {
+    didTimeout = true
+    controller.abort()
+  }, timeoutMs)
+  const maybeUnref = (timer as { unref?: () => void }).unref
+  if (typeof maybeUnref === 'function') maybeUnref.call(timer)
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timer),
+    timedOut: () => didTimeout,
+  }
+}
+
 /** "1024x1024" → {w,h}；支持 x / × / * / 中文“乘”。 */
 function parseSize(size: string): { w: number; h: number } | null {
   const m = size.trim().match(/(\d{3,5})\s*(?:[*xX×]|乘)\s*(\d{3,5})/)
@@ -965,8 +985,10 @@ function sizeToAspectRatio(size?: string): string | undefined {
 }
 
 const POLL_INTERVAL_MS = 5000
-const VIDEO_POLL_TIMEOUT_MS = 300000
-const IMAGE_POLL_TIMEOUT_MS = 120000
+const VIDEO_POLL_TIMEOUT_MS = 600000
+const IMAGE_POLL_TIMEOUT_MS = 300000
+const AUDIO_POLL_TIMEOUT_MS = 300000
+const MUSIC_SYNC_TIMEOUT_MS = 300000
 
 // ===== 调用入口 =====
 
@@ -2913,9 +2935,9 @@ async function callMinimaxAsyncTtsApi(input: GenerateMediaInput, fetchFn: typeof
   const taskId = submitBody.task_id
   if (!taskId) throw new Error(`MiniMax 异步 TTS 未返回 task_id: ${submitBody.base_resp?.status_msg ?? '未知错误'}`)
 
-  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
+  const deadline = Date.now() + AUDIO_POLL_TIMEOUT_MS
   for (;;) {
-    if (Date.now() > deadline) throw new Error(`MiniMax 异步 TTS 轮询超时: ${taskId}`)
+    if (Date.now() > deadline) throw new Error(`MiniMax 异步 TTS 轮询超时（${AUDIO_POLL_TIMEOUT_MS / 1000}s）: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
     const queryRes = await fetchFn(`${baseUrl}/query/t2a_async_query_v2?task_id=${encodeURIComponent(String(taskId))}`, {
       method: 'GET',
@@ -2947,81 +2969,92 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
   const { baseUrl, model } = input.config
   if (!baseUrl) throw new Error('minimax 缺少 baseUrl')
 
-  let coverFeatureId = input.coverFeatureId
-  let lyrics = input.lyrics
-  const reference = input.referencePaths?.[0] ? readReferenceFiles([input.referencePaths[0]], input.cwd)[0] : undefined
-  if (/^music-cover(?:-|$)/.test(model) && !coverFeatureId && reference) {
-    const preprocessRes = await fetchFn(`${baseUrl}/music_cover_preprocess`, {
+  const timeout = createInternalTimeoutSignal(MUSIC_SYNC_TIMEOUT_MS)
+  const musicSignal = timeout.signal
+  try {
+    let coverFeatureId = input.coverFeatureId
+    let lyrics = input.lyrics
+    const reference = input.referencePaths?.[0] ? readReferenceFiles([input.referencePaths[0]], input.cwd)[0] : undefined
+    if (/^music-cover(?:-|$)/.test(model) && !coverFeatureId && reference) {
+      const preprocessRes = await fetchFn(`${baseUrl}/music_cover_preprocess`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          audio_base64: reference.base64,
+        }),
+        signal: musicSignal,
+      })
+      if (!preprocessRes.ok) {
+        const text = await preprocessRes.text().catch(() => '')
+        throw new Error(`MiniMax 翻唱前处理失败 (${preprocessRes.status}): ${text.slice(0, 300)}`)
+      }
+      const preprocessBody = (await safeParseJson(preprocessRes, 'MiniMax 翻唱前处理')) as {
+        cover_feature_id?: string
+        formatted_lyrics?: string
+        base_resp?: { status_code?: number; status_msg?: string }
+      }
+      if (preprocessBody.base_resp && preprocessBody.base_resp.status_code !== 0) {
+        throw new Error(`MiniMax 翻唱前处理失败: ${preprocessBody.base_resp.status_msg ?? preprocessBody.base_resp.status_code}`)
+      }
+      coverFeatureId = preprocessBody.cover_feature_id
+      lyrics = lyrics ?? preprocessBody.formatted_lyrics
+      if (!coverFeatureId) throw new Error('MiniMax 翻唱前处理未返回 cover_feature_id')
+    }
+
+    const audioFormat = input.audioFormat ?? 'mp3'
+    const body: Record<string, unknown> = {
+      model,
+      prompt: input.prompt,
+      audio_setting: {
+        sample_rate: input.sampleRate ?? 44100,
+        bitrate: input.bitrate ?? 256000,
+        format: audioFormat,
+      },
+    }
+    if (lyrics) body.lyrics = lyrics
+    if (input.instrumental !== undefined) body.is_instrumental = input.instrumental
+    if (input.lyricsOptimizer !== undefined) body.lyrics_optimizer = input.lyricsOptimizer
+    if (input.musicOutputFormat) body.output_format = input.musicOutputFormat
+    if (input.aigcWatermark !== undefined) body.aigc_watermark = input.aigcWatermark
+    if (coverFeatureId) body.cover_feature_id = coverFeatureId
+    if (input.audioUrl) body.audio_url = input.audioUrl
+    if (/^music-cover(?:-|$)/.test(model) && reference && !coverFeatureId) body.audio_base64 = reference.base64
+
+    const res = await fetchFn(`${baseUrl}/music_generation`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        audio_base64: reference.base64,
-      }),
-      signal: input.signal,
+      body: JSON.stringify(body),
+      signal: musicSignal,
     })
-    if (!preprocessRes.ok) {
-      const text = await preprocessRes.text().catch(() => '')
-      throw new Error(`MiniMax 翻唱前处理失败 (${preprocessRes.status}): ${text.slice(0, 300)}`)
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`MiniMax 音乐生成失败 (${res.status}): ${text.slice(0, 300)}`)
     }
-    const preprocessBody = (await safeParseJson(preprocessRes, 'MiniMax 翻唱前处理')) as {
-      cover_feature_id?: string
-      formatted_lyrics?: string
+    const responseBody = (await safeParseJson(res, 'MiniMax 音乐生成')) as {
+      data?: { audio?: string; audio_url?: string; status?: number }
       base_resp?: { status_code?: number; status_msg?: string }
     }
-    if (preprocessBody.base_resp && preprocessBody.base_resp.status_code !== 0) {
-      throw new Error(`MiniMax 翻唱前处理失败: ${preprocessBody.base_resp.status_msg ?? preprocessBody.base_resp.status_code}`)
+    if (responseBody.base_resp && responseBody.base_resp.status_code !== 0) {
+      throw new Error(`MiniMax 音乐生成失败: ${responseBody.base_resp.status_msg ?? responseBody.base_resp.status_code}`)
     }
-    coverFeatureId = preprocessBody.cover_feature_id
-    lyrics = lyrics ?? preprocessBody.formatted_lyrics
-    if (!coverFeatureId) throw new Error('MiniMax 翻唱前处理未返回 cover_feature_id')
+    const audio = responseBody.data?.audio
+    const audioUrl = responseBody.data?.audio_url ?? (/^https?:\/\//.test(String(audio ?? '')) ? String(audio) : undefined)
+    if (audioUrl) {
+      return { images: [await downloadAsBase64(audioUrl, fetchFn, musicSignal, audioMimeForFormat(audioFormat))] }
+    }
+    if (audio) {
+      return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: base64FromHexAudioPayload(audio, 'MiniMax 音乐生成') }] }
+    }
+    throw new Error(`MiniMax 音乐生成未返回音频: ${responseBody.base_resp?.status_msg ?? '未知错误'}`)
+  } catch (err) {
+    if (timeout.timedOut()) {
+      throw new Error(`MiniMax 音乐生成超时（${MUSIC_SYNC_TIMEOUT_MS / 1000}s）：该模型通常需要 30-120 秒，请稍后重试或检查 MiniMax 服务状态`)
+    }
+    throw err
+  } finally {
+    timeout.clear()
   }
-
-  const audioFormat = input.audioFormat ?? 'mp3'
-  const body: Record<string, unknown> = {
-    model,
-    prompt: input.prompt,
-    audio_setting: {
-      sample_rate: input.sampleRate ?? 44100,
-      bitrate: input.bitrate ?? 256000,
-      format: audioFormat,
-    },
-  }
-  if (lyrics) body.lyrics = lyrics
-  if (input.instrumental !== undefined) body.is_instrumental = input.instrumental
-  if (input.lyricsOptimizer !== undefined) body.lyrics_optimizer = input.lyricsOptimizer
-  if (input.musicOutputFormat) body.output_format = input.musicOutputFormat
-  if (input.aigcWatermark !== undefined) body.aigc_watermark = input.aigcWatermark
-  if (coverFeatureId) body.cover_feature_id = coverFeatureId
-  if (input.audioUrl) body.audio_url = input.audioUrl
-  if (/^music-cover(?:-|$)/.test(model) && reference && !coverFeatureId) body.audio_base64 = reference.base64
-
-  const res = await fetchFn(`${baseUrl}/music_generation`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: input.signal,
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`MiniMax 音乐生成失败 (${res.status}): ${text.slice(0, 300)}`)
-  }
-  const responseBody = (await safeParseJson(res, 'MiniMax 音乐生成')) as {
-    data?: { audio?: string; audio_url?: string; status?: number }
-    base_resp?: { status_code?: number; status_msg?: string }
-  }
-  if (responseBody.base_resp && responseBody.base_resp.status_code !== 0) {
-    throw new Error(`MiniMax 音乐生成失败: ${responseBody.base_resp.status_msg ?? responseBody.base_resp.status_code}`)
-  }
-  const audio = responseBody.data?.audio
-  const audioUrl = responseBody.data?.audio_url ?? (/^https?:\/\//.test(String(audio ?? '')) ? String(audio) : undefined)
-  if (audioUrl) {
-    return { images: [await downloadAsBase64(audioUrl, fetchFn, input.signal, audioMimeForFormat(audioFormat))] }
-  }
-  if (audio) {
-    return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: base64FromHexAudioPayload(audio, 'MiniMax 音乐生成') }] }
-  }
-  throw new Error(`MiniMax 音乐生成未返回音频: ${responseBody.base_resp?.status_msg ?? '未知错误'}`)
 }
 
 async function callMinimaxVoiceCloneApi(

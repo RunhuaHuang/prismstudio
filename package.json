@@ -1,6 +1,6 @@
 {
   "name": "prismstudio",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "多模态生成控制台：图像 / 视频 / 音频一键生成，兼容国内外主流模型，内嵌 WebUI 配置与试用台。",
   "license": "MIT",
   "author": "Jacky Huang",

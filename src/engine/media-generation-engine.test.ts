@@ -2291,6 +2291,36 @@ describe('media-generation-engine · 音频', () => {
     expect(r.images[0]!.mediaType).toBe('audio/mpeg')
   })
 
+  test('minimax music：长耗时生成不复用调用方的短超时 signal', async () => {
+    const callerController = new AbortController()
+    callerController.abort()
+    const signals: Array<AbortSignal | null | undefined> = []
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal)
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ data: { audio: '49443304', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } }),
+        text: async () => JSON.stringify({ data: { audio: '49443304', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } }),
+        arrayBuffer: async () => new ArrayBuffer(1),
+      } as Response
+    }) as unknown as typeof fetch
+
+    const r = await generateMedia({
+      modality: 'audio', prompt: 'slow music', apiKey: 'k', audioTask: 'music',
+      config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-2.6', audioTask: 'music' }),
+      fetchFn,
+      signal: callerController.signal,
+    })
+
+    expect(signals.length).toBe(1)
+    expect(signals[0]).toBeDefined()
+    expect(signals[0]).not.toBe(callerController.signal)
+    expect(signals[0]?.aborted).toBe(false)
+    expect(r.images[0]!.data).toBe('SUQzBA==')
+  })
+
   test('minimax music-cover：参考音频先做前处理再生成翻唱', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'run-media-cover-'))
     const ref = join(cwd, 'ref.mp3')
