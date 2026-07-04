@@ -280,8 +280,22 @@ prismstudio --help                # 显示帮助
 每个工具支持丰富的厂商专属参数（如 OpenAI 的 `quality`/`background`、Gemini 的 `aspectRatio`/`imageSize`、Stability 的 `stylePreset`、视频的 `withAudio`/`frames` 等），详见各工具的 `inputSchema`。
 
 **生成产物**会保存到 `<输出目录>/generated-media/`：
+- 如果没有手动设置 `outputDir`，默认输出目录是 `~/.prismstudio/generated-media/`
+- WebUI 试用台的临时试用产物默认保存在 `~/.prismstudio/playground/`
 - 图片 / 音频同时以 base64 内联回传给 agent，便于直接预览
 - 视频体积大，仅返回本地路径
+
+> `~/.prismstudio` 是用户主目录下的隐藏文件夹（文件夹名前有一个点）。配置文件、默认生成产物和 WebUI 试用产物都会放在这里。
+
+**如何查看隐藏文件夹：**
+
+- **macOS Finder**：按 `Command + Shift + .` 显示/隐藏隐藏文件；或按 `Command + Shift + G`，输入 `~/.prismstudio` 后回车直接打开。
+- **Windows 文件资源管理器**：点击“查看 / View” → “显示 / Show” → 勾选“隐藏的项目 / Hidden items”；也可以按 `Win + R`，输入 `%USERPROFILE%\.prismstudio` 后回车打开。
+
+你也可以直接让 agent 帮你处理文件，例如：
+
+> “请把刚才生成的视频复制到我的桌面。”
+> “请把最新生成的图片移动到 `/Users/你的用户名/Downloads/作品/`。”
 
 ---
 

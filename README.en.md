@@ -280,8 +280,22 @@ Only configured modalities expose their tool (dynamic exposure — no dead-shell
 Each tool accepts rich vendor-specific params (e.g. OpenAI `quality`/`background`, Gemini `aspectRatio`/`imageSize`, Stability `stylePreset`, video `withAudio`/`frames`). See each tool's `inputSchema` for the full list.
 
 **Generated artifacts** are saved to `<output-dir>/generated-media/`:
+- If you do not set `outputDir`, the default output directory is `~/.prismstudio/generated-media/`
+- Temporary WebUI playground outputs are saved to `~/.prismstudio/playground/` by default
 - Images / audio are also inlined as base64 back to the agent for immediate preview
 - Video is large, so only the local path is returned
+
+> `~/.prismstudio` is a hidden folder under your home directory (the folder name starts with a dot). It stores the config file, default generated artifacts, and WebUI playground outputs.
+
+**How to view hidden folders:**
+
+- **macOS Finder**: press `Command + Shift + .` to toggle hidden files; or press `Command + Shift + G`, enter `~/.prismstudio`, and press Enter.
+- **Windows File Explorer**: open “View” → “Show” → enable “Hidden items”; or press `Win + R`, enter `%USERPROFILE%\.prismstudio`, and press Enter.
+
+You can also ask your agent to move or copy generated files for you, for example:
+
+> “Copy the video you just generated to my Desktop.”
+> “Move the latest generated image to `/Users/your-name/Downloads/works/`.”
 
 ---
 
