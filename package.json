@@ -1,6 +1,6 @@
 {
   "name": "prismstudio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "多模态生成控制台：图像 / 视频 / 音频一键生成，兼容国内外主流模型，内嵌 WebUI 配置与试用台。",
   "license": "MIT",
   "author": "Jacky Huang",
@@ -19,8 +19,12 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "figures",
     "README.md",
-    "LICENSE"
+    "README.en.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -32,8 +36,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.25.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "alpinejs": "^3.15.12"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: Prismstudio 版本
-      placeholder: "0.1.0（运行 `npx prismstudio --help` 看不到版本时，跑 `npm view prismstudio version`）"
+      placeholder: "例如 0.1.1（运行 `npx prismstudio --version` 查看）"
     validations:
       required: true
 

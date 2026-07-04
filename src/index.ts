@@ -16,7 +16,7 @@
  * - PRISMSTUDIO_CONFIG：指定 config.json 路径（默认 ~/.prismstudio/config.json）
  */
 
-import { createMcpServer, connectStdio, loadConfig, getConfigPath } from './mcp-server.js'
+import { createMcpServer, connectStdio, loadConfig, getConfigPath, PACKAGE_VERSION } from './mcp-server.js'
 import { isModalityReady } from './config.js'
 import { startWebuiServer } from './webui/server.js'
 
@@ -28,6 +28,7 @@ Prismstudio — 多模态生成控制台
   prismstudio --webui               启动本地 WebUI 配置台 + 试用台（浏览器打开 http://127.0.0.1:<port>）
   prismstudio --webui --port 8080   指定 WebUI 端口（默认 17899）
   prismstudio --output-dir <path>   覆盖生成物输出目录
+  prismstudio --version             显示版本号
   prismstudio --help                显示本帮助
 
 配置文件：
@@ -42,13 +43,15 @@ interface ParsedArgs {
   port: number
   outputDir?: string
   help: boolean
+  version: boolean
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { webui: false, port: 17899, help: false }
+  const parsed: ParsedArgs = { webui: false, port: 17899, help: false, version: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') parsed.help = true
+    else if (arg === '--version' || arg === '-v') parsed.version = true
     else if (arg === '--webui' || arg === 'webui') parsed.webui = true
     else if (arg === '--port') {
       const next = argv[i + 1]
@@ -108,6 +111,11 @@ async function main(): Promise<void> {
 
   if (args.help) {
     console.log(HELP)
+    return
+  }
+
+  if (args.version) {
+    console.log(PACKAGE_VERSION)
     return
   }
 

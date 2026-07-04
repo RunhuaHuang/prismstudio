@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-07-04
+
 ### Added
 - 双语 README（`README.md` 中文 + `README.en.md` 英文），顶部可一键切换。
 - 社区与治理文件：`CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、issue 模板。
@@ -14,6 +16,17 @@
 - 新增「能力总览」表格，按模态 × 厂商列出全部支持矩阵。
 - `package.json` 补全 `author` / `repository` / `homepage` / `bugs`，扩充实 `keywords`。
 - `LICENSE` 署名更新为 Jacky Huang。
+- WebUI 去除第三方 CDN 脚本/字体加载，改为本地 Alpine.js 依赖与系统字体。
+- Release/CI 固定 Bun 版本，补 `bun audit`、tag/package 版本一致性检查、npm 已发布版本检查、pack dry-run 与 CLI smoke test。
+- npm 包内容补齐 `figures/`、英文 README、CHANGELOG 与 SECURITY，保证 README 图片和安全文档在包内可访问。
+- CLI 增加 `--version` / `-v`，issue 模板可引导用户准确填写版本。
+
+### Security
+- WebUI 增加 CSP、`X-Content-Type-Options`、`Referrer-Policy`、`Cross-Origin-Resource-Policy`、`Permissions-Policy` 等安全响应头。
+- WebUI API 增加 loopback Host、Origin、Sec-Fetch-Site 与写入类 JSON Content-Type 校验，降低本机跨站请求触发真实 Key 调用的风险。
+
+### Removed
+- 移除未直接使用的 `zod` 直接依赖（仍由 MCP SDK 按需传递依赖）。
 
 ---
 
@@ -34,5 +47,6 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/RunhuaHuang/prismstudio/releases/tag/v0.1.0

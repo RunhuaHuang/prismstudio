@@ -119,6 +119,53 @@ Prismstudio encapsulates each `modality × vendor` pair into one of 14 protocol 
 
 ---
 
+## System requirements
+
+Prismstudio is a Node.js MCP Server. macOS and Windows **do not include** Node.js / npm / npx by default; please install **Node.js 20 or newer** first. The official Node.js installer usually installs npm and npx as well.
+
+### Check your installation
+
+```bash
+node -v
+npm -v
+npx -v
+```
+
+If `node -v` prints `v20.x`, `v22.x`, or newer, you are ready to continue.
+
+### Install Node.js
+
+**macOS**
+
+Choose one of these options:
+
+```bash
+# Official installer: download and install the LTS version
+# https://nodejs.org/
+
+# Or Homebrew
+brew install node
+
+# Or nvm
+nvm install --lts
+```
+
+**Windows**
+
+Choose one of these options:
+
+```powershell
+# Official installer: download and install the LTS version
+# https://nodejs.org/
+
+# Or winget
+winget install OpenJS.NodeJS.LTS
+```
+
+After installation, reopen Terminal / PowerShell and run `node -v`, `npm -v`, and `npx -v` again.
+
+---
+
 ## Quick Start
 
 ### Step 1 — Launch the WebUI to configure (recommended for first use)
@@ -192,6 +239,7 @@ prismstudio                       # Run as a stdio MCP server (default, for agen
 prismstudio --webui               # Launch the local WebUI console (opens 127.0.0.1:<port>)
 prismstudio --webui --port 8080   # Custom WebUI port (default 17899)
 prismstudio --output-dir <path>   # Override the generated-media output directory
+prismstudio --version             # Show version
 prismstudio --help                # Show help
 ```
 
@@ -243,7 +291,7 @@ Located at `~/.prismstudio/config.json` (override with `PRISMSTUDIO_CONFIG`):
 
 > **Per-vendor key memory**: each modality remembers the API key per preset (stored in `apiKeyByPreset`). Switching vendors never requires re-entering; switching back restores automatically.
 
-> **Security**: credentials are stored in plaintext (consistent with MCP ecosystem convention). The WebUI binds only to `127.0.0.1` (never exposed to the LAN) and does not set `Access-Control-Allow-Origin`, preventing cross-origin calls from other local pages. Manage file permissions yourself in production. See [SECURITY.md](SECURITY.md).
+> **Security**: credentials are stored in plaintext (consistent with MCP ecosystem convention). The WebUI binds only to `127.0.0.1`, loads no third-party CDN scripts/fonts, and uses security headers plus Origin / Sec-Fetch-Site / JSON Content-Type checks to reduce local cross-site request risk. Manage file permissions yourself in production. See [SECURITY.md](SECURITY.md).
 
 ---
 

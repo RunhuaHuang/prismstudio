@@ -5,6 +5,7 @@
  *
  * 路由：
  *   GET  /                  返回内嵌的 index.html（Alpine.js 单文件页面）
+ *   GET  /assets/alpine.min.js  从本地依赖加载 Alpine.js（不访问第三方 CDN）
  *   GET  /api/config        读取当前配置（apiKey 脱敏）
  *   PUT  /api/config        保存配置（WebUI 表单 → config.json）
  *   GET  /api/presets       返回全部 MEDIA_MODEL_PRESETS（供下拉选择）
@@ -15,7 +16,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { resolve } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { WEBUI_HTML } from './index-html.js'
 import {
   loadConfig,
@@ -41,6 +43,22 @@ import {
 import { persistGenerated } from '../persist.js'
 
 // ===== 工具函数 =====
+
+const require = createRequire(import.meta.url)
+let alpineScriptCache: string | null = null
+
+const HTML_CSP = [
+  "default-src 'none'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "media-src 'self' data:",
+  "connect-src 'self'",
+  "font-src 'self' data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ')
 
 interface TestRequestBody {
   modality: MediaModality
@@ -84,11 +102,117 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 /** 发送 JSON 响应 */
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data)
+  setCommonSecurityHeaders(res)
+  res.setHeader('Cache-Control', 'no-store')
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
   })
   res.end(body)
+}
+
+/** 发送纯文本/脚本响应 */
+function sendText(res: ServerResponse, status: number, body: string, contentType: string): void {
+  setCommonSecurityHeaders(res)
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': Buffer.byteLength(body),
+  })
+  res.end(body)
+}
+
+function setCommonSecurityHeaders(res: ServerResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
+}
+
+function setHtmlSecurityHeaders(res: ServerResponse): void {
+  setCommonSecurityHeaders(res)
+  res.setHeader('Content-Security-Policy', HTML_CSP)
+  res.setHeader('Cache-Control', 'no-store')
+}
+
+function loadAlpineScript(): string {
+  if (!alpineScriptCache) {
+    alpineScriptCache = readFileSync(require.resolve('alpinejs/dist/cdn.min.js'), 'utf-8')
+  }
+  return alpineScriptCache
+}
+
+interface ApiRequestMeta {
+  method: string
+  host?: string
+  origin?: string
+  secFetchSite?: string
+  contentType?: string
+}
+
+function stripPort(authority: string): string {
+  return authority.replace(/^\[/, '').replace(/\]$/, '').split(':')[0]?.toLowerCase() ?? ''
+}
+
+function getPort(authority: string): string {
+  const parts = authority.replace(/^\[/, '').replace(/\]$/, '').split(':')
+  return parts.length > 1 ? parts.at(-1)! : ''
+}
+
+export function isLoopbackAuthority(authority: string | undefined): boolean {
+  if (!authority) return false
+  const host = stripPort(authority)
+  return host === '127.0.0.1' || host === 'localhost'
+}
+
+/**
+ * 校验本地 WebUI API 请求，降低浏览器中其它网页触发本地副作用请求的风险。
+ * - Host 必须是 loopback
+ * - 有 Origin 时必须同为 loopback 且端口一致
+ * - 有 Sec-Fetch-Site 时必须是同源/直接导航
+ * - 写操作必须是 JSON
+ */
+export function validateLocalApiRequest(meta: ApiRequestMeta): string | null {
+  if (!isLoopbackAuthority(meta.host)) return 'Host 必须是 127.0.0.1 或 localhost'
+
+  if (meta.origin) {
+    try {
+      const originUrl = new URL(meta.origin)
+      const hostPort = getPort(meta.host!)
+      const originPort = originUrl.port || (originUrl.protocol === 'https:' ? '443' : '80')
+      if (!isLoopbackAuthority(originUrl.host) || originPort !== hostPort) {
+        return 'Origin 与 WebUI 本地地址不匹配'
+      }
+    } catch {
+      return 'Origin 无效'
+    }
+  }
+
+  if (meta.secFetchSite && !['same-origin', 'none'].includes(meta.secFetchSite)) {
+    return '拒绝跨站 API 请求'
+  }
+
+  const method = meta.method.toUpperCase()
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const contentType = meta.contentType?.toLowerCase() ?? ''
+    if (!contentType.includes('application/json')) return '写入类 API 请求必须使用 application/json'
+  }
+
+  return null
+}
+
+function validateIncomingApiRequest(req: IncomingMessage, method: string): string | null {
+  const header = (name: string) => {
+    const value = req.headers[name.toLowerCase()]
+    return Array.isArray(value) ? value[0] : value
+  }
+  return validateLocalApiRequest({
+    method,
+    host: header('host'),
+    origin: header('origin'),
+    secFetchSite: header('sec-fetch-site'),
+    contentType: header('content-type'),
+  })
 }
 
 /** 对配置做脱敏（隐藏 apiKey 中间部分） */
@@ -406,6 +530,7 @@ export function startWebuiServer(port: number): Promise<void> {
         // WebUI 与 API 同源（均由本 server 托管于 127.0.0.1），不需要 CORS。
         // 不设 Access-Control-Allow-Origin=*，避免本机其它恶意网页跨域访问 /api/test（会用真实 key）。
         if (method === 'OPTIONS') {
+          setCommonSecurityHeaders(res)
           res.writeHead(204)
           res.end()
           return
@@ -413,14 +538,26 @@ export function startWebuiServer(port: number): Promise<void> {
 
         // API 路由
         if (url.startsWith('/api/')) {
+          const apiError = validateIncomingApiRequest(req, method)
+          if (apiError) {
+            sendJson(res, 403, { error: apiError })
+            return
+          }
           const handled = await handleApi(method, fullUrl, req, res)
           if (!handled) sendJson(res, 404, { error: 'Not Found' })
+          return
+        }
+
+        // 本地依赖资源：不从第三方 CDN 加载，避免 WebUI 处理 API Key 时引入供应链脚本风险。
+        if (method === 'GET' && url === '/assets/alpine.min.js') {
+          sendText(res, 200, loadAlpineScript(), 'text/javascript; charset=utf-8')
           return
         }
 
         // 首页
         if (url === '/' || url === '/index.html') {
           const html = WEBUI_HTML
+          setHtmlSecurityHeaders(res)
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
           res.end(html)
           return
@@ -441,8 +578,8 @@ export function startWebuiServer(port: number): Promise<void> {
       process.stderr.write(`\n[prismstudio] WebUI 已启动：${url}\n`)
       process.stderr.write(`[prismstudio] 配置文件：${getConfigPath()}\n`)
       process.stderr.write(`[prismstudio] 按 Ctrl+C 退出\n\n`)
-      // 尝试自动打开浏览器（非关键，失败静默）
-      openBrowser(url).catch(() => {})
+      // 尝试自动打开浏览器（非关键，失败静默）；CI/测试可用 PRISMSTUDIO_NO_OPEN=1 禁用。
+      if (process.env.PRISMSTUDIO_NO_OPEN !== '1') openBrowser(url).catch(() => {})
       resolveStart()
     })
   })

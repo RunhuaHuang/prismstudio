@@ -14,7 +14,13 @@ Prismstudio 是一个本地优先的多模态生成 MCP Server。本文说明它
 ## WebUI 的网络暴露面
 
 - WebUI 的 HTTP server **仅绑定 `127.0.0.1`**，不监听局域网/公网地址，外部机器无法访问。
-- WebUI **不设置 `Access-Control-Allow-Origin` 响应头**，防止你浏览器里打开的其它网页跨域调用 `http://127.0.0.1:17899/api/test`（该接口会用你的真实 Key 发起生成请求）。
+- WebUI 不从第三方 CDN 加载 JavaScript 或字体；前端运行所需的 Alpine.js 来自本地 npm 依赖，避免配置页处理 API Key 时引入远端脚本供应链风险。
+- WebUI **不设置 `Access-Control-Allow-Origin` 响应头**，并对 API 请求做本地来源校验：
+  - `Host` 必须是 `127.0.0.1` 或 `localhost`。
+  - 有 `Origin` 时必须同为 loopback 且端口一致。
+  - 有 `Sec-Fetch-Site` 时必须是 `same-origin` 或 `none`。
+  - `POST` / `PUT` / `PATCH` / `DELETE` 必须使用 `application/json`。
+- WebUI 首页设置 CSP 等安全响应头，阻止外部资源加载、禁止被其它页面 frame 嵌入，并关闭 referrer 泄露。
 - WebUI 收到的请求体有 5MB 上限，防滥用。
 - `/api/config` 返回的 API Key 已脱敏（中间用 `****` 替换），避免完整 Key 回传到浏览器。
 

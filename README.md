@@ -119,6 +119,53 @@ Prismstudio 把「模态 × 厂商」封装成 14 种协议族，引擎内核按
 
 ---
 
+## 系统要求
+
+Prismstudio 是一个 Node.js MCP Server。macOS 和 Windows **默认不自带** Node.js / npm / npx；请先安装 **Node.js 20 或更高版本**。Node.js 官方安装包通常会同时安装 npm 与 npx。
+
+### 检查是否已安装
+
+```bash
+node -v
+npm -v
+npx -v
+```
+
+如果 `node -v` 显示 `v20.x`、`v22.x` 或更高版本，就可以继续。
+
+### 安装 Node.js
+
+**macOS**
+
+推荐任选一种：
+
+```bash
+# 官方安装包：下载并安装 LTS 版本
+# https://nodejs.org/
+
+# 或 Homebrew
+brew install node
+
+# 或 nvm
+nvm install --lts
+```
+
+**Windows**
+
+推荐任选一种：
+
+```powershell
+# 官方安装包：下载并安装 LTS 版本
+# https://nodejs.org/
+
+# 或 winget
+winget install OpenJS.NodeJS.LTS
+```
+
+安装完成后，重新打开终端 / PowerShell，再运行上面的 `node -v`、`npm -v`、`npx -v` 检查。
+
+---
+
 ## 快速开始
 
 ### 第 1 步：启动 WebUI 完成配置（推荐首次使用）
@@ -192,6 +239,7 @@ prismstudio                       # 以 stdio MCP 模式运行（默认，供 ag
 prismstudio --webui               # 启动本地 WebUI 配置台（浏览器打开 127.0.0.1:<port>）
 prismstudio --webui --port 8080   # 指定 WebUI 端口（默认 17899）
 prismstudio --output-dir <path>   # 覆盖生成物输出目录
+prismstudio --version             # 显示版本号
 prismstudio --help                # 显示帮助
 ```
 
@@ -243,7 +291,7 @@ prismstudio --help                # 显示帮助
 
 > **多渠道 Key 记忆**：每个模态按预设（渠道）单独记忆 API Key（存在 `apiKeyByPreset`）。切换厂商时无需重填，切回来自动恢复。
 
-> **安全说明**：凭证以明文存储（与 MCP 生态惯例一致）。WebUI 仅绑定 `127.0.0.1`，不会暴露到局域网，且不设 `Access-Control-Allow-Origin`，防止本机其它网页跨域调用。生产环境请自行做好文件权限管控。详见 [SECURITY.md](SECURITY.md)。
+> **安全说明**：凭证以明文存储（与 MCP 生态惯例一致）。WebUI 仅绑定 `127.0.0.1`，不加载第三方 CDN 脚本/字体，并通过安全响应头、Origin / Sec-Fetch-Site 校验与 JSON Content-Type 校验降低本机跨站请求风险。生产环境请自行做好文件权限管控。详见 [SECURITY.md](SECURITY.md)。
 
 ---
 

@@ -22,7 +22,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   generateMedia,
   resolveMediaConfig,
@@ -47,6 +49,18 @@ import {
   type DuoConfig,
 } from './config.js'
 import { persistGenerated, type McpContent } from './persist.js'
+
+function readPackageVersion(): string {
+  try {
+    const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: unknown }
+    return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+export const PACKAGE_VERSION = readPackageVersion()
 
 // ===== 参数解析辅助（fork 自 Run mcp.ts） =====
 
@@ -399,7 +413,7 @@ export function createMcpServer(outputDirOverride?: string): Server {
   const tools = candidates.filter((def) => isModalityReady(config, def.modality))
 
   const server = new Server(
-    { name: 'prismstudio', version: '0.1.0' },
+    { name: 'prismstudio', version: PACKAGE_VERSION },
     { capabilities: { tools: {} } },
   )
 

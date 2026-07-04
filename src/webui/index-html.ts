@@ -3,7 +3,7 @@
  *
  * 设计方向：Industrial Studio Console（工业工作室控制台）
  * - 三模态 = 三条通道（channel strip），各有信号灯/状态
- * - JetBrains Mono（数据/标签/代码）+ Space Grotesk（标题/正文）双字族
+ * - 系统无衬线字族（标题/正文）+ 系统等宽字族（数据/标签/代码），避免从第三方字体 CDN 加载资源
  * - 深色暖调底 + 单一信号色 acid lime（就绪/运行态）
  *
  * 三大区块：
@@ -20,7 +20,7 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Prismstudio · Multi-Modal Generation Console</title>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script defer src="/assets/alpine.min.js"></script>
 <script>
 // 防闪烁：Alpine 加载前先应用持久化的主题与语言（中文为默认）
 (function(){
@@ -32,9 +32,6 @@ export const WEBUI_HTML = `<!DOCTYPE html>
   } catch(e) { document.documentElement.setAttribute('data-theme','dark'); }
 })();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ===== 设计令牌：Industrial Studio Console（双主题） ===== */
 /* dark：深色暖调控制台（默认） */
@@ -117,6 +114,9 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 
   --radius:2px;
   --radius-lg:3px;
+
+  --font-sans:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -124,7 +124,7 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 html,body{
   background:var(--surface-0);
   color:var(--text-primary);
-  font-family:'Space Grotesk',sans-serif;
+  font-family:var(--font-sans);
   font-size:var(--fs-body);
   line-height:1.5;
   -webkit-font-smoothing:antialiased;
@@ -148,18 +148,18 @@ body::after{
   opacity:var(--noise-opacity);
 }
 
-.mono{font-family:'JetBrains Mono',monospace;font-feature-settings:"ss01","ss02"}
+.mono{font-family:var(--font-mono);font-feature-settings:"ss01","ss02"}
 
 /* ===== 通用控件 ===== */
 .wrap{max-width:1080px;margin:0 auto;padding:var(--space-xl) var(--space-lg) var(--space-2xl)}
 
-.label{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:500;
+.label{font-family:var(--font-mono);font-size:var(--fs-mono-xs);font-weight:500;
   letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
 
 input,select,textarea{
   width:100%;background:var(--surface-4);border:1px solid var(--line);
   color:var(--text-primary);padding:var(--space-sm) var(--space-md);
-  border-radius:var(--radius);font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);
+  border-radius:var(--radius);font-family:var(--font-mono);font-size:var(--fs-mono-md);
   transition:border-color .15s,box-shadow .15s;
 }
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--signal);
@@ -177,7 +177,7 @@ textarea{resize:vertical;line-height:1.6}
   width:100%;display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);
   background:var(--surface-4);border:1px solid var(--line);color:var(--text-primary);
   padding:var(--space-sm) var(--space-md);border-radius:var(--radius);cursor:pointer;
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);text-align:left;
+  font-family:var(--font-mono);font-size:var(--fs-mono-md);text-align:left;
   transition:border-color .15s,box-shadow .15s;
 }
 .cmd-trigger:hover{border-color:var(--line-bright)}
@@ -200,7 +200,7 @@ textarea{resize:vertical;line-height:1.6}
 .cmd-menu::-webkit-scrollbar-thumb{background:var(--line-bright);border-radius:4px}
 /* 分组标签（vendor） */
 .cmd-group-label{
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:600;
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);font-weight:600;
   letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);
   padding:var(--space-sm) var(--space-sm) var(--space-xs);position:sticky;top:0;
   background:var(--surface-3);
@@ -210,7 +210,7 @@ textarea{resize:vertical;line-height:1.6}
 .cmd-item{
   display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);
   padding:var(--space-sm);border-radius:var(--radius);cursor:pointer;
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:var(--text-secondary);
+  font-family:var(--font-mono);font-size:var(--fs-mono-md);color:var(--text-secondary);
   transition:background .1s,color .1s;
 }
 .cmd-item .cmd-item-main{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -226,7 +226,7 @@ textarea{resize:vertical;line-height:1.6}
 /* 按钮 */
 .btn{
   display:inline-flex;align-items:center;gap:var(--space-sm);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+  font-family:var(--font-mono);font-size:var(--fs-mono-sm);font-weight:600;
   letter-spacing:.08em;text-transform:uppercase;padding:var(--space-sm) var(--space-lg);
   border-radius:var(--radius);border:1px solid var(--line-bright);background:var(--surface-3);
   color:var(--text-primary);cursor:pointer;transition:all .15s;
@@ -246,14 +246,14 @@ textarea{resize:vertical;line-height:1.6}
 }
 .brand-mark{display:flex;align-items:baseline;gap:var(--space-md);flex-wrap:wrap}
 .brand-logo{
-  font-family:'JetBrains Mono',monospace;font-weight:700;font-size:var(--fs-display-lg);
+  font-family:var(--font-mono);font-weight:700;font-size:var(--fs-display-lg);
   letter-spacing:-.04em;color:var(--text-primary);line-height:1;
 }
 .brand-logo .dot{color:var(--signal)}
-.brand-tag{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);
+.brand-tag{font-family:var(--font-mono);font-size:var(--fs-mono-sm);
   color:var(--text-secondary);letter-spacing:.05em}
 .device-id{
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-muted);
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-muted);
   letter-spacing:.1em;text-align:right;line-height:1.7;
 }
 .device-id code{color:var(--text-secondary);background:var(--surface-2);padding:1px 6px;border-radius:var(--radius)}
@@ -262,7 +262,7 @@ textarea{resize:vertical;line-height:1.6}
 .nav-bar{display:flex;gap:0;margin-bottom:var(--space-xl);border-bottom:1px solid var(--line)}
 .nav-tab{
   display:flex;align-items:center;gap:var(--space-sm);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:500;
+  font-family:var(--font-mono);font-size:var(--fs-mono-sm);font-weight:500;
   letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);
   padding:var(--space-md) var(--space-lg);background:none;border:none;cursor:pointer;
   border-bottom:2px solid transparent;transition:all .15s;position:relative;
@@ -305,11 +305,11 @@ textarea{resize:vertical;line-height:1.6}
 }
 @keyframes pulse{0%{opacity:.6;transform:scale(.8)}100%{opacity:0;transform:scale(2)}}
 
-.ch-name{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:var(--fs-mono-md);
+.ch-name{font-family:var(--font-mono);font-weight:600;font-size:var(--fs-mono-md);
   letter-spacing:.05em;color:var(--text-primary);text-transform:uppercase}
-.ch-no{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim)}
+.ch-no{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim)}
 
-.ch-status{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);
+.ch-status{font-family:var(--font-mono);font-size:var(--fs-mono-xs);
   letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);
   padding:2px 8px;border:1px solid var(--line);border-radius:var(--radius);
 }
@@ -318,7 +318,7 @@ textarea{resize:vertical;line-height:1.6}
 .ch-field{margin-bottom:var(--space-md)}
 .ch-field:last-child{margin-bottom:0}
 .ch-field .label{display:block;margin-bottom:var(--space-xs)}
-.ch-help{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim);
+.ch-help{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);
   margin-top:var(--space-xs);line-height:1.5;word-break:break-all}
 
 /* 开关：拨杆式 */
@@ -334,12 +334,12 @@ textarea{resize:vertical;line-height:1.6}
 }
 .toggle input:checked + .toggle-track{background:var(--signal-glow);border-color:var(--signal-dim)}
 .toggle input:checked + .toggle-track::after{transform:translateX(18px);background:var(--signal)}
-.toggle-label{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary)}
+.toggle-label{font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--text-secondary)}
 
 /* 全局输出目录 + 保存 */
 .master-section{margin-top:var(--space-lg);padding-top:var(--space-lg);border-top:1px dashed var(--line)}
 .save-bar{display:flex;align-items:center;gap:var(--space-md);margin-top:var(--space-lg)}
-.save-msg{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm)}
+.save-msg{font-family:var(--font-mono);font-size:var(--fs-mono-sm)}
 .save-msg.ok{color:var(--signal)} .save-msg.err{color:var(--error)}
 
 /* ===== 试用台 PLAYGROUND ===== */
@@ -348,13 +348,13 @@ textarea{resize:vertical;line-height:1.6}
 
 .pg-panel{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:var(--space-lg)}
 .pg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)}
-.pg-title{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+.pg-title{font-family:var(--font-mono);font-size:var(--fs-mono-sm);font-weight:600;
   letter-spacing:.1em;text-transform:uppercase;color:var(--text-secondary)}
 
 .modality-switch{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .modality-switch button{
   background:var(--surface-3);border:none;color:var(--text-muted);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);font-weight:600;
+  font-family:var(--font-mono);font-size:var(--fs-mono-sm);font-weight:600;
   letter-spacing:.08em;text-transform:uppercase;padding:var(--space-sm);
   cursor:pointer;transition:all .15s;border-right:1px solid var(--line);
 }
@@ -364,7 +364,7 @@ textarea{resize:vertical;line-height:1.6}
 
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);margin-top:var(--space-md)}
 .warn-banner{
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--warn);
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--warn);
   background:rgba(245,161,66,.06);border:1px solid rgba(245,161,66,.3);border-radius:var(--radius);
   padding:var(--space-sm) var(--space-md);margin-top:var(--space-md);line-height:1.6;
 }
@@ -378,9 +378,9 @@ textarea{resize:vertical;line-height:1.6}
 .result-item{border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-sm);background:var(--surface-3);margin-bottom:var(--space-sm)}
 .result-item img{max-width:100%;height:auto;border-radius:var(--radius);display:block;margin:0 auto}
 .result-item audio{width:100%}
-.result-meta{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-muted);margin-top:var(--space-xs)}
-.result-summary{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary);white-space:pre-line;line-height:1.6;margin-top:var(--space-sm)}
-.err-text{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--error);margin-top:var(--space-md)}
+.result-meta{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-muted);margin-top:var(--space-xs)}
+.result-summary{font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--text-secondary);white-space:pre-line;line-height:1.6;margin-top:var(--space-sm)}
+.err-text{font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--error);margin-top:var(--space-md)}
 
 /* 生成中的扫描线动画 */
 .scan-line{position:relative;overflow:hidden}
@@ -397,19 +397,19 @@ textarea{resize:vertical;line-height:1.6}
 .agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--space-sm);margin-bottom:var(--space-lg)}
 .agent-chip{
   background:var(--surface-3);border:1px solid var(--line-bright);border-radius:var(--radius);padding:var(--space-md);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--text-secondary);
+  font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--text-secondary);
   cursor:pointer;transition:all .15s;text-align:left;letter-spacing:.04em;
 }
 .agent-chip:hover{border-color:var(--signal-dim);color:var(--text-primary);background:var(--surface-4)}
 .agent-chip.active{background:rgba(196,245,66,.08);border-color:var(--signal);color:var(--signal)}
 
-.patch-note{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-sm);color:var(--warn);
+.patch-note{font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--warn);
   background:rgba(245,161,66,.06);border-left:2px solid var(--warn);padding:var(--space-md);
   margin-top:var(--space-md);margin-bottom:var(--space-lg);line-height:1.6}
 
 .code-block{
   background:var(--code-bg);border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-lg);
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-md);color:var(--code-text);
+  font-family:var(--font-mono);font-size:var(--fs-mono-md);color:var(--code-text);
   overflow-x:auto;line-height:1.8;white-space:pre;
 }
 /* JSON 语法着色 */
@@ -418,7 +418,7 @@ textarea{resize:vertical;line-height:1.6}
 .code-block .tok-num{color:#5fb8f5}
 .code-block .tok-punc{color:var(--text-muted)}
 .code-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm)}
-.copy-btn{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--signal);
+.copy-btn{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--signal);
   background:var(--surface-3);border:1px solid var(--signal-dim);border-radius:var(--radius);
   cursor:pointer;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;transition:all .15s}
 .copy-btn:hover{background:var(--signal-glow);border-color:var(--signal)}
@@ -428,7 +428,7 @@ textarea{resize:vertical;line-height:1.6}
   margin-top:var(--space-2xl);padding-top:var(--space-lg);border-top:1px solid var(--line);
   display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--space-md);
 }
-.foot-text{font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.08em}
+.foot-text{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.08em}
 .foot-dots{display:flex;gap:6px}
 .foot-dots span{width:6px;height:6px;border-radius:50%;background:var(--text-dim)}
 .foot-dots span:first-child{background:var(--signal)}
@@ -447,7 +447,7 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 }
 .toggle-group button{
   background:none;border:none;cursor:pointer;padding:5px 10px;
-  font-family:'JetBrains Mono',monospace;font-size:var(--fs-mono-xs);font-weight:600;
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);font-weight:600;
   letter-spacing:.06em;color:var(--text-muted);transition:all .15s;
   border-right:1px solid var(--line);
 }
@@ -576,7 +576,7 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
                   </button>
                   <input type="file" :id="'fileInput_' + m.key" accept=".json" @change="onFileChange($event, m.key)" style="display:none" />
                   <template x-if="config[m.key]?.apiKey">
-                    <span style="font-size:var(--fs-mono-xs);color:#58a6ff;font-family:'JetBrains Mono',monospace" x-text="getGcpCredentialDesc(config[m.key].apiKey)"></span>
+                    <span style="font-size:var(--fs-mono-xs);color:#58a6ff;font-family:var(--font-mono)" x-text="getGcpCredentialDesc(config[m.key].apiKey)"></span>
                   </template>
                 </div>
                 <span style="font-size:var(--fs-mono-xs);color:var(--text-dim)" x-text="t.gcpJsonHelp"></span>
