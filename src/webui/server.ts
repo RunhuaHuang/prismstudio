@@ -288,7 +288,7 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
   const prompt = body.prompt?.trim()
   if (!prompt) throw new Error('prompt 不能为空')
 
-  // 试用产物落到 ~/.duo-mcp/playground/
+  // 试用产物落到 ~/.prismstudio/playground/
   const playgroundDir = resolve(getConfigDir(), 'playground')
   mkdirSync(playgroundDir, { recursive: true })
 
@@ -335,14 +335,14 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
 
 /** 计算启动命令（优先 npx，回退 node + 本包路径） */
 function buildStartCommand(): string {
-  return `npx -y duo-mcp`
+  return `npx -y prismstudio`
 }
 
 function exportAgentConfig(agent: string): { agent: string; config: unknown; note: string } {
   const cmd = buildStartCommand()
   const serverEntry = {
     command: 'npx',
-    args: ['-y', 'duo-mcp'],
+    args: ['-y', 'prismstudio'],
   }
 
   switch (agent) {
@@ -353,7 +353,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         note: '写入 Claude Desktop 配置文件（macOS: ~/Library/Application Support/Claude/claude_desktop_config.json）',
         config: {
           mcpServers: {
-            'duo-mcp': serverEntry,
+            'prismstudio': serverEntry,
           },
         },
       }
@@ -363,7 +363,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         note: '写入 ~/.cursor/mcp.json（全局）或项目 .cursor/mcp.json',
         config: {
           mcpServers: {
-            'duo-mcp': serverEntry,
+            'prismstudio': serverEntry,
           },
         },
       }
@@ -375,7 +375,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         note: `${agent} 的 mcpServers 配置`,
         config: {
           mcpServers: {
-            'duo-mcp': serverEntry,
+            'prismstudio': serverEntry,
           },
         },
       }
@@ -387,7 +387,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         note: `通用 stdio 命令：${cmd}`,
         config: {
           command: 'npx',
-          args: ['-y', 'duo-mcp'],
+          args: ['-y', 'prismstudio'],
         },
       }
   }
@@ -438,9 +438,9 @@ export function startWebuiServer(port: number): Promise<void> {
 
     server.listen(port, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${port}`
-      process.stderr.write(`\n[duo-mcp] WebUI 已启动：${url}\n`)
-      process.stderr.write(`[duo-mcp] 配置文件：${getConfigPath()}\n`)
-      process.stderr.write(`[duo-mcp] 按 Ctrl+C 退出\n\n`)
+      process.stderr.write(`\n[prismstudio] WebUI 已启动：${url}\n`)
+      process.stderr.write(`[prismstudio] 配置文件：${getConfigPath()}\n`)
+      process.stderr.write(`[prismstudio] 按 Ctrl+C 退出\n\n`)
       // 尝试自动打开浏览器（非关键，失败静默）
       openBrowser(url).catch(() => {})
       resolveStart()

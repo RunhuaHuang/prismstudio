@@ -7,13 +7,13 @@ body:
     attributes:
       value: |
         感谢反馈！请尽量填全以下信息，能大幅缩短定位时间。
-        如果是安全漏洞，请走 [Security Advisory](https://github.com/RunhuaHuang/duo-mcp/security/advisories/new)，不要在 issue 公开。
+        如果是安全漏洞，请走 [Security Advisory](https://github.com/RunhuaHuang/prismstudio/security/advisories/new)，不要在 issue 公开。
 
   - type: input
     id: version
     attributes:
-      label: Duo-MCP 版本
-      placeholder: "0.1.0（运行 `npx duo-mcp --help` 看不到版本时，跑 `npm view duo-mcp version`）"
+      label: Prismstudio 版本
+      placeholder: "0.1.0（运行 `npx prismstudio --help` 看不到版本时，跑 `npm view prismstudio version`）"
     validations:
       required: true
 
@@ -73,7 +73,7 @@ body:
     attributes:
       label: 最小复现步骤
       placeholder: |
-        1. 启动 `npx duo-mcp --webui`
+        1. 启动 `npx prismstudio --webui`
         2. 配置 xxx 模态，选 xxx 预设
         3. 在试用台 / agent 里输入 xxx
         4. 看到 xxx

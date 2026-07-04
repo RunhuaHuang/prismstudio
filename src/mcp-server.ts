@@ -262,7 +262,7 @@ export async function runGeneration(
   if (!resolved) {
     const modalityName = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'
     throw new Error(
-      `${modalityName}生成未配置好。请在 WebUI（duo-mcp --webui）中为该模态填写 API Key 并选择模型后重试。配置文件：${getConfigPath()}`,
+      `${modalityName}生成未配置好。请在 WebUI（prismstudio --webui）中为该模态填写 API Key 并选择模型后重试。配置文件：${getConfigPath()}`,
     )
   }
 
@@ -399,7 +399,7 @@ export function createMcpServer(outputDirOverride?: string): Server {
   const tools = candidates.filter((def) => isModalityReady(config, def.modality))
 
   const server = new Server(
-    { name: 'duo-mcp', version: '0.1.0' },
+    { name: 'prismstudio', version: '0.1.0' },
     { capabilities: { tools: {} } },
   )
 

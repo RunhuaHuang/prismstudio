@@ -4,4 +4,12 @@ dist/
 .DS_Store
 .env
 .env.local
-~/.duo-mcp/
+
+# 本地配置（含明文 API Key，绝不提交）
+.prismstudio/
+
+# Playwright MCP 工具快照（临时产物）
+.playwright-mcp/
+
+# 营销物料（小红书图文等，不随代码库分发）
+social-card-*/

@@ -30,9 +30,9 @@
 - **内嵌 WebUI**（`--webui`）：配置台 / 试用台 / 接入向导三合一，Industrial Studio Console 美学，日间/夜间主题 + 中英文切换，仅绑定 `127.0.0.1`。
 - **多渠道 Key 记忆**：每个模态按 preset（厂商）单独保存 API Key，切换无需重填、切回自动恢复。
 - **Google 鉴权**：Vertex / Gemini 服务账号 JSON 支持（`src/engine/google-auth.ts`）。
-- **本地配置**：`~/.duo-mcp/config.json`，可用 `DUO_MCP_CONFIG` 环境变量覆盖路径。
+- **本地配置**：`~/.prismstudio/config.json`，可用 `PRISMSTUDIO_CONFIG` 环境变量覆盖路径。
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/duo-mcp/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/RunhuaHuang/duo-mcp/releases/tag/v0.1.0
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/RunhuaHuang/prismstudio/releases/tag/v0.1.0

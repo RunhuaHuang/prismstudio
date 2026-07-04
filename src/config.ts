@@ -3,7 +3,7 @@
  *
  * 替代 Run 的 builtin-tool-config.ts + config-paths.ts，脱离 ~/.run 与 Electron。
  *
- * - 配置目录：~/.duo-mcp/（可用环境变量 DUO_MCP_CONFIG 指定任意 config.json 路径覆盖）
+ * - 配置目录：~/.prismstudio/（可用环境变量 PRISMSTUDIO_CONFIG 指定任意 config.json 路径覆盖）
  * - 配置文件：config.json（明文 JSON，与 MCP 生态惯例一致）
  * - WebUI 写 / MCP 读，共享同一文件
  *
@@ -62,16 +62,16 @@ export interface DuoConfig {
 
 // ===== 路径解析 =====
 
-const DEFAULT_CONFIG_DIR = join(homedir(), '.duo-mcp')
+const DEFAULT_CONFIG_DIR = join(homedir(), '.prismstudio')
 const DEFAULT_CONFIG_PATH = join(DEFAULT_CONFIG_DIR, 'config.json')
 
 /**
  * 配置文件路径。优先级：
- * 1. 环境变量 DUO_MCP_CONFIG（指定任意 config.json 绝对路径）
- * 2. 默认 ~/.duo-mcp/config.json
+ * 1. 环境变量 PRISMSTUDIO_CONFIG（指定任意 config.json 绝对路径）
+ * 2. 默认 ~/.prismstudio/config.json
  */
 export function getConfigPath(): string {
-  const fromEnv = process.env.DUO_MCP_CONFIG?.trim()
+  const fromEnv = process.env.PRISMSTUDIO_CONFIG?.trim()
   return fromEnv || DEFAULT_CONFIG_PATH
 }
 
@@ -104,7 +104,7 @@ export function loadConfig(): DuoConfig {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...EMPTY_CONFIG }
     return parsed as DuoConfig
   } catch (err) {
-    console.error(`[duo-mcp] 配置文件解析失败 (${path})：`, err)
+    console.error(`[prismstudio] 配置文件解析失败 (${path})：`, err)
     return { ...EMPTY_CONFIG }
   }
 }
@@ -116,7 +116,7 @@ export function saveConfig(config: DuoConfig): void {
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify(config, null, 2) + '\n', 'utf-8')
   } catch (err) {
-    console.error(`[duo-mcp] 配置文件写入失败 (${path})：`, err)
+    console.error(`[prismstudio] 配置文件写入失败 (${path})：`, err)
     throw err
   }
 }

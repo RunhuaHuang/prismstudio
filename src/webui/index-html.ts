@@ -19,14 +19,14 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DUO-MCP · Multi-Modal Generation Console</title>
+<title>Prismstudio · Multi-Modal Generation Console</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script>
 // 防闪烁：Alpine 加载前先应用持久化的主题与语言（中文为默认）
 (function(){
   try {
-    var theme = localStorage.getItem('duo-theme') || 'dark';
-    var lang = localStorage.getItem('duo-lang') || 'zh';
+    var theme = localStorage.getItem('prism-theme') || 'dark';
+    var lang = localStorage.getItem('prism-lang') || 'zh';
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en');
   } catch(e) { document.documentElement.setAttribute('data-theme','dark'); }
@@ -475,12 +475,12 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 </style>
 </head>
 <body>
-<div class="wrap" x-data="duoApp()" x-init="init()" x-cloak>
+<div class="wrap" x-data="prismApp()" x-init="init()" x-cloak>
 
   <!-- ===== 顶栏：设备铭牌 ===== -->
   <header class="console-head">
     <div class="brand-mark">
-      <div class="brand-logo">DUO<span class="dot">·</span>MCP</div>
+      <div class="brand-logo">PRISM<span class="dot">·</span>STUDIO</div>
       <span class="brand-tag" x-text="t.brandTag"></span>
     </div>
     <div class="head-controls">
@@ -493,7 +493,7 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
       <button class="icon-btn" @click="toggleTheme()" :aria-label="t.themeLabel"
         :title="t.themeLabel" x-text="theme==='dark' ? '☀' : '☾'"></button>
       <div class="device-id">
-        <div>UNIT <code x-text="status.configPath ? status.configPath.split('/').slice(-2).join('/') : '~/.duo-mcp'"></code></div>
+        <div>UNIT <code x-text="status.configPath ? status.configPath.split('/').slice(-2).join('/') : '~/.prismstudio'"></code></div>
         <div>OUT <code x-text="status.outputDir ? status.outputDir.split('/').slice(-2).join('/') : 'generated-media'"></code></div>
       </div>
     </div>
@@ -824,12 +824,12 @@ function dropdown(initial) {
   }
 }
 
-function duoApp() {
+function prismApp() {
   return {
     tab: 'config',
     // ===== 主题与语言（持久化，默认 dark + 中文） =====
-    theme: localStorage.getItem('duo-theme') || 'dark',
-    lang: localStorage.getItem('duo-lang') || 'zh',
+    theme: localStorage.getItem('prism-theme') || 'dark',
+    lang: localStorage.getItem('prism-lang') || 'zh',
 
     // ===== i18n 文案字典 =====
     dict: {
@@ -852,9 +852,10 @@ function duoApp() {
         labelModelProto: '模型 / 协议 / BaseURL',
         phModel: '模型 ID', phProtocol: '协议（如 openai-images）', phBaseUrl: 'base url（可选）',
         labelOutputDir: '主输出目录',
-        phOutputDir: '留空 = ~/.duo-mcp/generated-media',
+        phOutputDir: '留空 = ~/.prismstudio/generated-media',
         btnCommit: '▸ 提交配置', btnCommitting: '提交中…',
         committed: '✓ 已提交', commitFailed: '提交失败',
+        autosaved: '✓ 已自动保存',
         pgTitle: '◢ 信号发生器',
         labelPrompt: '提示词', promptSuffix: '/ 文本', phPrompt: '描述要生成的内容…',
         labelCount: '数量', labelSize: '尺寸', labelDuration: '时长（秒）',
@@ -868,7 +869,7 @@ function duoApp() {
         patchTitle: '◢ 接线盘',
         patchIntro: '请先在「通道」配置好各模态，再将本控制台接入你的 agent。选择下方目标并复制配置片段。',
         configSnippet: 'mcpServers.json', copy: '⧉ 复制', copied: '✓ 已复制',
-        footer: 'DUO-MCP · MIT · 多模态生成控制台',
+        footer: 'Prismstudio · MIT · 多模态生成控制台',
         agents: { claude:'Claude Desktop', cursor:'Cursor', cline:'Cline', windsurf:'Windsurf', generic:'通用 stdio' },
       },
       en: {
@@ -890,9 +891,10 @@ function duoApp() {
         labelModelProto: 'Model / Protocol / BaseURL',
         phModel: 'model-id', phProtocol: 'protocol (e.g. openai-images)', phBaseUrl: 'base url (optional)',
         labelOutputDir: 'Master Output Directory',
-        phOutputDir: 'blank = ~/.duo-mcp/generated-media',
+        phOutputDir: 'blank = ~/.prismstudio/generated-media',
         btnCommit: '▸ Commit Config', btnCommitting: 'committing…',
         committed: '✓ COMMITTED', commitFailed: 'commit failed',
+        autosaved: '✓ autosaved',
         pgTitle: '◢ Signal Generator',
         labelPrompt: 'Prompt', promptSuffix: '/ Text', phPrompt: 'describe what to generate…',
         labelCount: 'Count', labelSize: 'Size', labelDuration: 'Duration (s)',
@@ -906,7 +908,7 @@ function duoApp() {
         patchTitle: '◢ Patch Bay',
         patchIntro: 'Configure your channels first, then route this console into your agent. Pick a target below and copy the routing snippet.',
         configSnippet: 'mcpServers.json', copy: '⧉ COPY', copied: '✓ COPIED',
-        footer: 'DUO-MCP · MIT · multi-modal generation console',
+        footer: 'Prismstudio · MIT · multi-modal generation console',
         agents: { claude:'Claude Desktop', cursor:'Cursor', cline:'Cline', windsurf:'Windsurf', generic:'Generic stdio' },
       },
     },
@@ -1031,7 +1033,7 @@ function duoApp() {
     // ===== 主题与语言切换 =====
     setLang(l) {
       this.lang = l;
-      try { localStorage.setItem('duo-lang', l); } catch(e){}
+      try { localStorage.setItem('prism-lang', l); } catch(e){}
       document.documentElement.setAttribute('lang', l === 'zh' ? 'zh-CN' : 'en');
     },
     toggleTheme() {
@@ -1040,7 +1042,7 @@ function duoApp() {
     },
     applyTheme() {
       document.documentElement.setAttribute('data-theme', this.theme);
-      try { localStorage.setItem('duo-theme', this.theme); } catch(e){}
+      try { localStorage.setItem('prism-theme', this.theme); } catch(e){}
     },
 
     // JSON 语法高亮：单次分词，回调判断类型，一次生成 HTML
@@ -1063,8 +1065,21 @@ function duoApp() {
       this.applyTheme();
       await Promise.all([this.loadConfig(), this.loadPresets(), this.loadStatus()]);
       this.loadExport();
+      // 配置载入完成后，开启自动保存监听。loadConfig 末尾把 _loaded 置 true。
+      // 监听每个模态的关键字段 + outputDir，任一变化即 debounce 自动保存。
+      const watchedPaths = [];
+      for (const k of ['image','video','audio']) {
+        for (const f of ['enabled','presetId','apiKey','model','protocol','baseUrl','audioTask']) {
+          watchedPaths.push('config.' + k + '.' + f);
+        }
+      }
+      watchedPaths.push('config.outputDir');
+      for (const p of watchedPaths) {
+        this.$watch(p, () => this.scheduleAutoSave());
+      }
     },
     async loadConfig() {
+      this._restoring = true;
       const r = await fetch('/api/config'); this.config = await r.json();
       for (const k of ['image','video','audio']) {
         if (!this.config[k]) this.config[k] = {enabled:false, presetId:'', apiKey:''};
@@ -1080,6 +1095,8 @@ function duoApp() {
           this.config[k].apiKey = remembered;
         }
       }
+      // 配置已就绪，开启自动保存（下一帧后解除 _restoring，避免回填触发的 watch 事件）
+      this.$nextTick(() => { this._loaded = true; this._restoring = false; });
     },
     async loadPresets() {
       const r = await fetch('/api/presets'); this.presets = await r.json();
@@ -1101,10 +1118,52 @@ function duoApp() {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || this.t.commitFailed);
+        // 回填服务器返回的脱敏配置——置 _restoring 防止 watch 触发循环自动保存
+        this._restoring = true;
         this.config = data.config; this.saveMsg = this.t.committed;
+        this.$nextTick(() => { this._restoring = false; });
         await this.loadStatus();
       } catch (e) { this.saveErr = true; this.saveMsg = '✗ ' + e.message; }
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
+    },
+    /**
+     * 自动保存（debounce）。监听 config 变化，停顿 800ms 后静默 PUT。
+     * 让「勾选启用 / 切模型 / 改 Key」即时生效，无需手动点提交。
+     * 静默：不设 saving、成功不弹 toast，仅失败提示。手动提交按钮保留作即时入口。
+     */
+    _autoSaveTimer: null,
+    _restoring: false,
+    scheduleAutoSave() {
+      // 首次载入回填阶段不触发；保存后从服务器回填配置时也不触发（防循环）
+      if (!this._loaded || this._restoring) return;
+      clearTimeout(this._autoSaveTimer);
+      this._autoSaveTimer = setTimeout(() => this.silentSave(), 800);
+    },
+    async silentSave() {
+      // 复用 saveConfig 的 apiKeyByPreset 同步逻辑，但不设 saving 状态、成功不弹 toast
+      for (const k of ['image','video','audio']) {
+        const mod = this.config[k];
+        if (mod && mod.presetId && mod.apiKey && !mod.apiKey.includes('****')) {
+          if (!mod.apiKeyByPreset) mod.apiKeyByPreset = {};
+          mod.apiKeyByPreset[mod.presetId] = mod.apiKey;
+        }
+      }
+      try {
+        const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || this.t.commitFailed);
+        // 回填服务器返回的脱敏配置——置 _restoring 防止 watch 触发循环自动保存
+        this._restoring = true;
+        this.config = data.config;
+        this.$nextTick(() => { this._restoring = false; });
+        await this.loadStatus();
+        // 极轻量的已保存提示，2s 自动消失
+        this.saveMsg = this.t.autosaved || '✓ 已自动保存'; this.saveErr = false;
+        setTimeout(() => { if (this.saveMsg === (this.t.autosaved || '✓ 已自动保存')) this.saveMsg = ''; }, 2000);
+      } catch (e) {
+        this.saveErr = true; this.saveMsg = '✗ 自动保存失败: ' + e.message;
+        setTimeout(() => this.saveMsg = '', 4000);
+      }
     },
     onPresetChange(key) {
       const mod = this.config[key];

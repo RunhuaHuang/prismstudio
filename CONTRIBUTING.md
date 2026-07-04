@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你对 Duo-MCP 的兴趣！🎉 无论是提 issue、修 bug、加新模型预设，还是改进文档，都非常欢迎。
+感谢你对 Prismstudio 的兴趣！🎉 无论是提 issue、修 bug、加新模型预设，还是改进文档，都非常欢迎。
 
 ## 开发环境
 
@@ -10,8 +10,8 @@
 - Node.js ≥ 20（运行时；发布的产物是纯 Node，不依赖 Bun 运行时）
 
 ```bash
-git clone https://github.com/RunhuaHuang/duo-mcp.git
-cd duo-mcp
+git clone https://github.com/RunhuaHuang/prismstudio.git
+cd prismstudio
 bun install
 ```
 

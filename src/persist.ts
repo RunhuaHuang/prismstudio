@@ -133,7 +133,7 @@ export function persistGenerated(
     mkdirSync(options.outputDir, { recursive: true })
   } catch (err) {
     // 目录已存在或创建失败都不致命，单文件写入失败会在下面捕获
-    if (!isAlreadyExistsError(err)) console.warn(`[duo-mcp] 创建输出目录失败:`, err)
+    if (!isAlreadyExistsError(err)) console.warn(`[prismstudio] 创建输出目录失败:`, err)
   }
 
   const sanitizedCustom = customFilename?.trim() ? sanitizeFilename(customFilename.trim()) : ''
@@ -153,7 +153,7 @@ export function persistGenerated(
       localPath = fullPath
       savedPaths.push(fullPath)
     } catch (err) {
-      console.warn(`[duo-mcp] 写入文件失败 (${filename})：`, err)
+      console.warn(`[prismstudio] 写入文件失败 (${filename})：`, err)
     }
 
     items.push({ localPath, filename, mediaType: item.mediaType, data: item.data })

@@ -1,6 +1,6 @@
 <div align="center">
 
-# Duo-MCP
+# Prismstudio
 
 **A standalone multimodal generation MCP Server** — one command, let any AI agent generate images / video / audio
 
@@ -8,20 +8,20 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node Version](https://img.shields.io/badge/node-%E2%89%A520-green.svg)](package.json)
-[![npm version](https://img.shields.io/npm/v/duo-mcp.svg)](https://www.npmjs.com/package/duo-mcp)
-[![CI](https://github.com/RunhuaHuang/duo-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/RunhuaHuang/duo-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/prismstudio.svg)](https://www.npmjs.com/package/prismstudio)
+[![CI](https://github.com/RunhuaHuang/prismstudio/actions/workflows/ci.yml/badge.svg)](https://github.com/RunhuaHuang/prismstudio/actions/workflows/ci.yml)
 
 [简体中文](README.md) ｜ **English**
 
 </div>
 
 <p align="center">
-  <img src="figures/webui-overview.png" alt="Duo-MCP WebUI console overview" width="100%">
+  <img src="figures/webui-overview.png" alt="Prismstudio WebUI console overview" width="100%">
 </p>
 
 ---
 
-Duo-MCP is a standalone service that follows the [Model Context Protocol](https://modelcontextprotocol.io). It lets any MCP-compatible AI agent (Claude Desktop, Cursor, Cline, Windsurf, VS Code, …) directly call **dozens of mainstream multimodal models** to generate images, video, and audio — without integrating each provider's API yourself.
+Prismstudio is a standalone service that follows the [Model Context Protocol](https://modelcontextprotocol.io). It lets any MCP-compatible AI agent (Claude Desktop, Cursor, Cline, Windsurf, VS Code, …) directly call **dozens of mainstream multimodal models** to generate images, video, and audio — without integrating each provider's API yourself.
 
 It solves the "configuration is annoying" problem with a **built-in WebUI**: one command opens a browser where you pick a model, fill in your key, try it out, and copy-paste the wiring config — as easy as a desktop app.
 
@@ -68,13 +68,13 @@ Zero-code wiring: the WebUI wizard copies a `mcpServers` JSON snippet in one cli
 - **Full multimodal coverage**: text-to-image, image editing, text-to-video, image-to-video, TTS, music generation, voice cloning
 - **Built-in WebUI**: config console + playground + wiring wizard in one — zero config, no hand-written JSON
 - **Dynamic tool exposure**: only configured modalities expose their tool — no dead-shell tools
-- **Local-first**: credentials stored in plaintext at `~/.duo-mcp/config.json`, WebUI binds only to `127.0.0.1`, nothing is ever uploaded
+- **Local-first**: credentials stored in plaintext at `~/.prismstudio/config.json`, WebUI binds only to `127.0.0.1`, nothing is ever uploaded
 
 ---
 
 ## Capabilities
 
-Duo-MCP encapsulates each `modality × vendor` pair into one of 14 protocol families; the engine core dispatches to the right provider based on your config. **60 preset models** in total:
+Prismstudio encapsulates each `modality × vendor` pair into one of 14 protocol families; the engine core dispatches to the right provider based on your config. **60 preset models** in total:
 
 ### Image generation (28 models · text-to-image · image-to-image · editing)
 
@@ -124,7 +124,7 @@ Duo-MCP encapsulates each `modality × vendor` pair into one of 14 protocol fami
 ### Step 1 — Launch the WebUI to configure (recommended for first use)
 
 ```bash
-npx duo-mcp --webui
+npx prismstudio --webui
 ```
 
 Your browser opens at `http://127.0.0.1:17899`. There you can:
@@ -155,9 +155,9 @@ For Claude Desktop, edit the config (macOS: `~/Library/Application Support/Claud
 ```json
 {
   "mcpServers": {
-    "duo-mcp": {
+    "prismstudio": {
       "command": "npx",
-      "args": ["-y", "duo-mcp"]
+      "args": ["-y", "prismstudio"]
     }
   }
 }
@@ -172,14 +172,14 @@ Restart Claude Desktop, then ask Claude to generate images, video, or audio righ
 ```json
 {
   "mcpServers": {
-    "duo-mcp": { "command": "npx", "args": ["-y", "duo-mcp"] }
+    "prismstudio": { "command": "npx", "args": ["-y", "prismstudio"] }
   }
 }
 ```
 
 **Cline / Windsurf / VS Code**: same structure, written to the agent's MCP config location.
 
-**Generic stdio**: run `npx -y duo-mcp` directly and interact over stdin/stdout.
+**Generic stdio**: run `npx -y prismstudio` directly and interact over stdin/stdout.
 
 </details>
 
@@ -188,18 +188,18 @@ Restart Claude Desktop, then ask Claude to generate images, video, or audio righ
 ## Command reference
 
 ```bash
-duo-mcp                       # Run as a stdio MCP server (default, for agents)
-duo-mcp --webui               # Launch the local WebUI console (opens 127.0.0.1:<port>)
-duo-mcp --webui --port 8080   # Custom WebUI port (default 17899)
-duo-mcp --output-dir <path>   # Override the generated-media output directory
-duo-mcp --help                # Show help
+prismstudio                       # Run as a stdio MCP server (default, for agents)
+prismstudio --webui               # Launch the local WebUI console (opens 127.0.0.1:<port>)
+prismstudio --webui --port 8080   # Custom WebUI port (default 17899)
+prismstudio --output-dir <path>   # Override the generated-media output directory
+prismstudio --help                # Show help
 ```
 
 **Environment variables:**
 
 | Variable | Default | Description |
 |---|---|---|
-| `DUO_MCP_CONFIG` | `~/.duo-mcp/config.json` | Config file path (useful for switching between setups) |
+| `PRISMSTUDIO_CONFIG` | `~/.prismstudio/config.json` | Config file path (useful for switching between setups) |
 
 ---
 
@@ -223,7 +223,7 @@ Each tool accepts rich vendor-specific params (e.g. OpenAI `quality`/`background
 
 ## Config file
 
-Located at `~/.duo-mcp/config.json` (override with `DUO_MCP_CONFIG`):
+Located at `~/.prismstudio/config.json` (override with `PRISMSTUDIO_CONFIG`):
 
 ```jsonc
 {
@@ -274,7 +274,7 @@ More in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  duo-mcp (one process, one command)              │
+│  prismstudio (one process, one command)              │
 │                                                   │
 │  ┌────────────────────────────────────────────┐  │
 │  │  Engine core (14 protocol families, 60)     │  │
@@ -288,7 +288,7 @@ More in [CONTRIBUTING.md](CONTRIBUTING.md).
 │   │ (for agents)    │      │ (for humans)     │    │
 │   └────────┬───────┘      └────────┬─────────┘    │
 │            └───────┬────────────────┘             │
-│         shares ~/.duo-mcp/config.json             │
+│         shares ~/.prismstudio/config.json             │
 └───────────────────────────────────────────────────┘
 ```
 
