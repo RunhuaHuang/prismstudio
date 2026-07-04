@@ -989,6 +989,7 @@ const VIDEO_POLL_TIMEOUT_MS = 600000
 const IMAGE_POLL_TIMEOUT_MS = 300000
 const AUDIO_POLL_TIMEOUT_MS = 300000
 const MUSIC_SYNC_TIMEOUT_MS = 300000
+const MUSIC_DOWNLOAD_TIMEOUT_MS = 120000
 
 // ===== 调用入口 =====
 
@@ -3041,7 +3042,18 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
     const audio = responseBody.data?.audio
     const audioUrl = responseBody.data?.audio_url ?? (/^https?:\/\//.test(String(audio ?? '')) ? String(audio) : undefined)
     if (audioUrl) {
-      return { images: [await downloadAsBase64(audioUrl, fetchFn, musicSignal, audioMimeForFormat(audioFormat))] }
+      timeout.clear()
+      const downloadTimeout = createInternalTimeoutSignal(MUSIC_DOWNLOAD_TIMEOUT_MS)
+      try {
+        return { images: [await downloadAsBase64(audioUrl, fetchFn, downloadTimeout.signal, audioMimeForFormat(audioFormat))] }
+      } catch (err) {
+        if (downloadTimeout.timedOut()) {
+          throw new Error(`MiniMax 音乐音频下载超时（${MUSIC_DOWNLOAD_TIMEOUT_MS / 1000}s）：生成已完成，但下载音频文件耗时过长`)
+        }
+        throw err
+      } finally {
+        downloadTimeout.clear()
+      }
     }
     if (audio) {
       return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: base64FromHexAudioPayload(audio, 'MiniMax 音乐生成') }] }

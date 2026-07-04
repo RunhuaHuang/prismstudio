@@ -2321,6 +2321,50 @@ describe('media-generation-engine · 音频', () => {
     expect(r.images[0]!.data).toBe('SUQzBA==')
   })
 
+  test('minimax music：audio_url 下载使用独立下载超时 signal', async () => {
+    const callerController = new AbortController()
+    callerController.abort()
+    const calls: Array<{ url: string; signal: AbortSignal | null | undefined }> = []
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      calls.push({ url, signal: init?.signal })
+      if (url.endsWith('/music_generation')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: { audio_url: 'https://cdn.example.com/song.mp3', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } }),
+          text: async () => JSON.stringify({ data: { audio_url: 'https://cdn.example.com/song.mp3', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } }),
+          arrayBuffer: async () => new ArrayBuffer(1),
+        } as Response
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'audio/mpeg' }),
+        json: async () => ({}),
+        text: async () => '',
+        arrayBuffer: async () => arrayBufferFromBuffer(Buffer.from('mp3-data')),
+      } as Response
+    }) as unknown as typeof fetch
+
+    const r = await generateMedia({
+      modality: 'audio', prompt: 'slow music url', apiKey: 'k', audioTask: 'music',
+      config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-2.6', audioTask: 'music' }),
+      fetchFn,
+      signal: callerController.signal,
+    })
+
+    expect(calls.map((c) => c.url)).toEqual(['https://api.minimax.chat/v1/music_generation', 'https://cdn.example.com/song.mp3'])
+    expect(calls[0]!.signal).toBeDefined()
+    expect(calls[1]!.signal).toBeDefined()
+    expect(calls[0]!.signal).not.toBe(callerController.signal)
+    expect(calls[1]!.signal).not.toBe(callerController.signal)
+    expect(calls[1]!.signal).not.toBe(calls[0]!.signal)
+    expect(r.images[0]!.mediaType).toBe('audio/mpeg')
+    expect(r.images[0]!.data).toBe(Buffer.from('mp3-data').toString('base64'))
+  })
+
   test('minimax music-cover：参考音频先做前处理再生成翻唱', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'run-media-cover-'))
     const ref = join(cwd, 'ref.mp3')

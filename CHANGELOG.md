@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-07-04
+
+### Fixed
+- MiniMax 音乐 `audio_url` 结果下载改用独立 2 分钟下载超时，避免 5 分钟生成等待预算被下载阶段继续消耗。
+
 ## [0.1.3] — 2026-07-04
 
 ### Fixed
@@ -61,7 +66,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.0...v0.1.1
