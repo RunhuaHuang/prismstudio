@@ -508,7 +508,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
   const serverEntry = {
     command: 'npx',
     args: ['-y', 'prismstudio@latest'],
-    timeoutMs: 600000,
+    timeoutMs: 1800000,
   }
 
   switch (agent) {
@@ -554,7 +554,7 @@ function exportAgentConfig(agent: string): { agent: string; config: unknown; not
         config: {
           command: 'npx',
           args: ['-y', 'prismstudio@latest'],
-          timeoutMs: 600000,
+          timeoutMs: 1800000,
         },
       }
   }
