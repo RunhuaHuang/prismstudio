@@ -273,6 +273,80 @@ describe('media-generation-engine · 图像 openai-images', () => {
     expect(JSON.parse(calls[0]!.body!).size).toBe('2560x1440')
   })
 
+  test('Seedream 5.0 Pro 小尺寸自动提升到 Pro 有效尺寸（像素范围 [1280x720, 2048x2048]）', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { data: [{ url: 'https://ark/i.png' }] } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    await generateMedia({
+      modality: 'image',
+      prompt: '小猪在天上飞',
+      size: '640x360', // 16:9 比例，640x360=230400 < 921600
+      config: makeImageConfig({
+        model: 'doubao-seedream-5-0-pro-251220',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      }),
+      apiKey: 'ark',
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    // 640x360 (16:9) < 921600，应提升到 16:9 的 1K 档 1312x736
+    expect(body.size).toBe('1312x736')
+  })
+
+  test('Seedream 5.0 Pro 比例尺寸正确映射到 1K 档位', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([{ ok: true, json: { data: [{ b64_json: 'AAAA' }] } }])
+    await generateMedia({
+      modality: 'image',
+      prompt: '生成一张 16:9 横版图',
+      size: '16:9',
+      config: makeImageConfig({
+        model: 'doubao-seedream-5-0-pro-251220',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      }),
+      apiKey: 'ark',
+      fetchFn,
+    })
+    // Pro 16:9 比例档位应为 1312x736（1K 档像素值）
+    expect(JSON.parse(calls[0]!.body!).size).toBe('1312x736')
+  })
+
+  test('Seedream 5.0 Pro 大尺寸自动裁剪到最大像素限制', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([{ ok: true, json: { data: [{ b64_json: 'AAAA' }] } }])
+    await generateMedia({
+      modality: 'image',
+      prompt: '超高分辨率图片',
+      size: '4096x4096', // 4096x4096=16777216 > 2048x2048=4194304
+      config: makeImageConfig({
+        model: 'doubao-seedream-5-0-pro-251220',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      }),
+      apiKey: 'ark',
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    // 应缩放到 2048x2048 或保持 1:1 比例在最大像素范围内
+    const pixels = body.size.split('x').map(Number).reduce((a, b) => a * b, 1)
+    expect(pixels).toBeLessThanOrEqual(2048 * 2048)
+  })
+
+  test('Seedream 5.0 Pro 尺寸超出宽高比限制抛错', async () => {
+    // 使用一个能被 parseSize 解析但宽高比超出 [1/16, 16] 限制的尺寸
+    // 5000x100 = 50:1，超过 16:1 限制
+    const { fetchFn } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'image',
+      prompt: '超宽图',
+      size: '5000x100', // 宽高比 50:1，超过 16:1 限制
+      config: makeImageConfig({
+        model: 'doubao-seedream-5-0-pro-251220',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+      }),
+      apiKey: 'ark',
+      fetchFn,
+    })).rejects.toThrow(/宽高比必须在.*范围内/)
+  })
+
   test('Seedream 参考图编辑仍走 /images/generations JSON image 数组，不走 /images/edits multipart', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'run-seedream-ref-'))
     const ref = join(cwd, 'ref.png')
@@ -2470,6 +2544,150 @@ describe('media-generation-engine · 音频', () => {
       config: makeImageConfig({ modality: 'audio', protocol: 'dashscope-voice-clone', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'cosyvoice-v2', audioTask: 'clone' }),
       fetchFn,
     })).rejects.toThrow(/样本音频/)
+  })
+})
+
+// ===== 火山语音 TTS 测试 =====
+
+describe('media-generation-engine · volcengine-tts（豆包 Seed Audio / 火山语音）', () => {
+  test('volcengine-tts：直接返回 base64 音频', async () => {
+    const { fetchFn } = makeSequencedFetch([{ ok: true, json: { code: 3000, audio: 'SUQzBA==' } }])
+    const r = await generateMedia({
+      modality: 'audio', prompt: '你好世界', apiKey: 'volc-key',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'seed-audio-1.0',
+      }),
+      fetchFn,
+    })
+    expect(r.images[0]!.data).toBe('SUQzBA==')
+    expect(r.images[0]!.mediaType).toBe('audio/mpeg')
+  })
+
+  test('volcengine-tts：通过 url 下载音频', async () => {
+    // 需要提供一个有效的 arrayBuffer 响应
+    const audioData = Buffer.from('fake-mp3-data').toString('base64')
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { code: 3000, url: 'https://cdn.example.com/audio.mp3' } },
+      { ok: true, headers: { 'content-type': 'audio/mpeg' }, arrayBuffer: Buffer.from('fake-mp3-data').buffer },
+    ])
+    const r = await generateMedia({
+      modality: 'audio', prompt: '你好', apiKey: 'volc-key',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'seed-audio-1.0',
+      }),
+      fetchFn,
+    })
+    expect(r.images[0]!.data).toBe(audioData)
+  })
+
+  test('volcengine-tts：使用 speaker 参数', async () => {
+    let lastBody: unknown = null
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/tts/create')) {
+        lastBody = JSON.parse(init?.body as string)
+        return { ok: true, status: 200, json: async () => ({ code: 3000, audio: 'SUQzBA==' }), text: async () => '{"code":3000,"audio":"SUQzBA=="}' } as Response
+      }
+      return { ok: true, json: async () => ({}), text: async () => '{}' } as Response
+    }) as unknown as typeof fetch
+
+    await generateMedia({
+      modality: 'audio', prompt: '测试语音', apiKey: 'key', voice: 'zh_male_tao',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'seed-audio-1.0',
+      }),
+      fetchFn,
+    })
+    expect((lastBody as Record<string, unknown>).speaker).toBe('zh_male_tao')
+  })
+
+  test('volcengine-tts：错误码非 3000 抛错', async () => {
+    const { fetchFn } = makeSequencedFetch([{ ok: true, json: { code: 4000, message: 'Invalid request' } }])
+    await expect(generateMedia({
+      modality: 'audio', prompt: '测试', apiKey: 'k',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'seed-audio-1.0',
+      }),
+      fetchFn,
+    })).rejects.toThrow(/火山语音 TTS 错误.*4000/)
+  })
+
+  test('volcengine-tts：缺少 baseUrl 抛错', async () => {
+    const { fetchFn } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'audio', prompt: '测试', apiKey: 'k',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-tts',
+        baseUrl: '', model: 'seed-audio-1.0',
+      }),
+      fetchFn,
+    })).rejects.toThrow(/缺少 baseUrl/)
+  })
+})
+
+describe('media-generation-engine · volcengine-plan-tts（豆包 Seed TTS 2.0 Agent Plan）', () => {
+  test('volcengine-plan-tts：成功解析 NDJSON 流式响应', async () => {
+    // mock NDJSON 流式响应（每行一个 JSON）
+    const ndjsonResponse = [
+      '{"code":1000,"data":"SUQzB"}',
+      '{"code":1000,"data":"AAAAAA=="}',
+      '{"code":20000000,"message":"success"}',
+    ].join('\n')
+    const fetchFn = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/plain' }),
+        json: async () => ({}),
+        text: async () => ndjsonResponse,
+      } as Response
+    }) as unknown as typeof fetch
+
+    const r = await generateMedia({
+      modality: 'audio', prompt: '你好', apiKey: 'plan-key',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-plan-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'doubao-seed-tts-2.0',
+      }),
+      fetchFn,
+    })
+    expect(r.images[0]!.mediaType).toBe('audio/mpeg')
+    expect(r.images[0]!.data).toBeTruthy()
+  })
+
+  test('volcengine-plan-tts：使用默认 speaker', async () => {
+    let capturedBody: unknown = null
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      // volcengine-plan-tts 实际路径是 /api/v3/plan/tts/unidirectional
+      if (url.includes('/plan/tts')) {
+        capturedBody = JSON.parse(init?.body as string)
+        return {
+          ok: true, status: 200,
+          json: async () => ({}),
+          text: async () => '{"code":20000000,"data":"SUQzBA=="}',
+        } as Response
+      }
+      return { ok: true, json: async () => ({}), text: async () => '{}' } as Response
+    }) as unknown as typeof fetch
+
+    await generateMedia({
+      modality: 'audio', prompt: '测试', apiKey: 'k',
+      config: makeImageConfig({
+        modality: 'audio', protocol: 'volcengine-plan-tts',
+        baseUrl: 'https://openspeech.bytedance.com', model: 'doubao-seed-tts-2.0',
+      }),
+      fetchFn,
+    })
+    // 默认 speaker 应该是 zh_female_gaolengyujie_uranus_bigtts
+    expect(capturedBody).not.toBeNull()
+    const reqParams = (capturedBody as Record<string, unknown>).req_params as Record<string, unknown>
+    expect(reqParams.speaker).toBe('zh_female_gaolengyujie_uranus_bigtts')
   })
 })
 

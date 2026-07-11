@@ -25,7 +25,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
-import { createHmac } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import {
   isGoogleVertexJsonCredential,
   buildGoogleGenerateContentRequestTarget,
@@ -53,6 +53,8 @@ export type MediaProtocol =
   | 'dashscope-sync'
   | 'dashscope-voice-clone'
   | 'volcengine-async'
+  | 'volcengine-tts'
+  | 'volcengine-plan-tts'
   | 'kling-async'
   | 'zhipu-async'
   | 'minimax'
@@ -145,10 +147,22 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
   },
   {
+    id: 'doubao-seedream-5-pro', label: '豆包 · Seedream 5.0 Pro（火山方舟）', vendor: '豆包',
+    modality: 'image', protocol: 'openai-images', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    model: 'doubao-seedream-5-0-pro-260628', supportsEdit: true, defaultSize: '2048x2048',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  },
+  {
     id: 'doubao-seedream-5-lite', label: '豆包 · Seedream 5.0 Lite（火山方舟）', vendor: '豆包',
     modality: 'image', protocol: 'openai-images', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     model: 'doubao-seedream-5-0-lite-260214', supportsEdit: true, defaultSize: '2048x2048',
     helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  },
+  {
+    id: 'doubao-seedream-5-lite-agent-plan', label: '豆包 · Seedream 5.0 Lite（Agent Plan）', vendor: '豆包',
+    modality: 'image', protocol: 'openai-images', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    model: 'doubao-seedream-5-0-lite', supportsEdit: true, defaultSize: '2048x2048',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?advancedActiveKey=agentPlan',
   },
   {
     id: 'doubao-seedream-5', label: '豆包 · Seedream 5.0（火山方舟）', vendor: '豆包',
@@ -285,6 +299,24 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     model: 'doubao-seedance-2-0-mini-260615', supportsEdit: false, defaultSize: '1280x720',
     helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  },
+  {
+    id: 'doubao-seedance-2-agent-plan', label: '豆包 · Seedance 2.0（Agent Plan）', vendor: '豆包',
+    modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    model: 'doubao-seedance-2-0', supportsEdit: false, defaultSize: '1920x1080',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?advancedActiveKey=agentPlan',
+  },
+  {
+    id: 'doubao-seedance-2-fast-agent-plan', label: '豆包 · Seedance 2.0 Fast（Agent Plan）', vendor: '豆包',
+    modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    model: 'doubao-seedance-2-0-fast', supportsEdit: false, defaultSize: '1920x1080',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?advancedActiveKey=agentPlan',
+  },
+  {
+    id: 'doubao-seedance-2-mini-agent-plan', label: '豆包 · Seedance 2.0 Mini（Agent Plan）', vendor: '豆包',
+    modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3',
+    model: 'doubao-seedance-2-0-mini', supportsEdit: false, defaultSize: '1280x720',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?advancedActiveKey=agentPlan',
   },
   {
     id: 'doubao-seedance-1-5-pro', label: '豆包 · Seedance 1.5 Pro（火山方舟）', vendor: '豆包',
@@ -462,6 +494,18 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     model: 'speech-02-hd-clone', supportsEdit: false, defaultSize: '', audioTask: 'clone',
     helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
   },
+  {
+    id: 'doubao-seed-audio', label: '豆包 · Seed Audio 1.0（火山语音）', vendor: '豆包',
+    modality: 'audio', protocol: 'volcengine-tts', baseUrl: 'https://openspeech.bytedance.com',
+    model: 'seed-audio-1.0', supportsEdit: false, defaultSize: '', audioTask: 'tts',
+    helpUrl: 'https://console.volcengine.com/speech/new/setting/apikeys',
+  },
+  {
+    id: 'doubao-seed-tts-2-agent-plan', label: '豆包 · Seed TTS 2.0（Agent Plan）', vendor: '豆包',
+    modality: 'audio', protocol: 'volcengine-plan-tts', baseUrl: 'https://openspeech.bytedance.com',
+    model: 'doubao-seed-tts-2.0', supportsEdit: false, defaultSize: '', audioTask: 'tts',
+    helpUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?advancedActiveKey=agentPlan',
+  },
 ]
 
 export const CUSTOM_MEDIA_PRESET_ID = 'custom'
@@ -526,6 +570,18 @@ const AUDIO_CHANNEL_DEFAULTS: Record<string, Pick<MediaModelPreset, 'protocol' |
     protocol: 'minimax',
     baseUrl: 'https://api.minimaxi.com/v1',
     model: 'speech-2.8-hd',
+    audioTask: 'tts',
+  },
+  'doubao-seed-audio': {
+    protocol: 'volcengine-tts',
+    baseUrl: 'https://openspeech.bytedance.com',
+    model: 'seed-audio-1.0',
+    audioTask: 'tts',
+  },
+  'doubao-seed-tts-2-agent-plan': {
+    protocol: 'volcengine-plan-tts',
+    baseUrl: 'https://openspeech.bytedance.com',
+    model: 'doubao-seed-tts-2.0',
     audioTask: 'tts',
   },
 }
@@ -1152,12 +1208,15 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
       return callMinimaxMusicApi(input, fetchFn)
     }
     if (task === 'clone') {
+      if (protocol === 'volcengine-tts') return callVolcengineTtsApi(input, fetchFn, references)
       if (protocol === 'zhipu-async') return callZhipuVoiceCloneApi(input, fetchFn, references)
       if (protocol === 'dashscope-sync' || protocol === 'dashscope-voice-clone') return callDashscopeVoiceCloneApi(input, fetchFn, references)
       if (protocol === 'minimax' || protocol === 'minimax-tts-async' || protocol === 'minimax-voice-clone') return callMinimaxVoiceCloneApi(input, fetchFn, references)
       throw new Error(`声音复刻不支持协议族: ${protocol}`)
     }
     // tts
+    if (protocol === 'volcengine-tts') return callVolcengineTtsApi(input, fetchFn, references)
+    if (protocol === 'volcengine-plan-tts') return callVolcenginePlanTtsApi(input, fetchFn)
     if (protocol === 'zhipu-async') return callZhipuTtsApi(input, fetchFn)
     if (protocol === 'dashscope-sync') return callDashscopeTtsApi(input, fetchFn)
     if (protocol === 'minimax') return callMinimaxTtsApi(input, fetchFn)
@@ -1227,6 +1286,10 @@ function isSeedreamHighResImageModel(model: string): boolean {
   return /^doubao-seedream-(?:4|5)(?:-|$)/i.test(model)
 }
 
+function isSeedreamProImageModel(model: string): boolean {
+  return /^doubao-seedream-5-0-pro-/i.test(model)
+}
+
 function isVolcengineSeedreamModel(model: string): boolean {
   return /^doubao-seedream-/i.test(model)
 }
@@ -1292,13 +1355,51 @@ function formatSeedreamHighResSize(size: string): string {
   return `${scaled.w}x${scaled.h}`
 }
 
+function formatSeedreamProSize(size: string): string {
+  const normalized = normalizeSizeText(size, 'image') ?? size.trim()
+  if (normalized === 'auto') return '2K'
+
+  // Seedream 5.0 Pro 的像素范围与 5.0 Lite/4.5 不同：[1280x720, 2048x2048]，
+  // 因此不能复用 formatSeedreamHighResSize 的 minPixels=2560*1440 约束，
+  // 否则合法小尺寸会被错误提升到超限值。比例档位取官方 1K 档像素值。
+  const minPixels = 1280 * 720
+  const maxPixels = 2048 * 2048
+  const ratioMap: Record<string, string> = {
+    '1:1': '1024x1024',
+    '16:9': '1312x736',
+    '9:16': '736x1312',
+    '4:3': '1152x864',
+    '3:4': '864x1152',
+  }
+  if (/^\d+\s*:\s*\d+$/.test(normalized)) {
+    return ratioMap[normalized.replace(/\s+/g, '')] ?? '2K'
+  }
+
+  const parsed = parseSize(normalized)
+  if (!parsed) return '2K'
+  const aspect = parsed.w / parsed.h
+  if (aspect < 1 / 16 || aspect > 16) {
+    throw new Error('Seedream 图像 size 宽高比必须在 [1/16, 16] 范围内')
+  }
+  const pixels = parsed.w * parsed.h
+  if (pixels >= minPixels && pixels <= maxPixels) return `${parsed.w}x${parsed.h}`
+  if (pixels < minPixels) {
+    const ratio = sizeToAspectRatio(normalized)
+    if (ratio && ratioMap[ratio]) return ratioMap[ratio]!
+  }
+  const scaled = scaleSizeToPixelRange(parsed, minPixels, maxPixels)
+  return `${scaled.w}x${scaled.h}`
+}
+
 function formatOpenAiImageSize(size: string, model: string): string {
   const normalized = normalizeSizeText(size, 'image') ?? size.trim()
   if (normalized === 'auto') return normalized
   const ratio = sizeToAspectRatio(normalized)
   if (isSeedreamHighResImageModel(model)) {
     // 火山 Seedream 4/5 使用 OpenAI-compatible Images 路径，但不接受 1024x1024
-    // 这类小图；像素总量至少 2560x1440，默认按官方高分辨率档归一化。
+    // 这类小图；5.0 Pro 像素范围 [1280x720, 2048x2048] 与 Lite/4.5 的
+    // [2560x1440, 4096x4096] 不同，需走独立尺寸约束。
+    if (isSeedreamProImageModel(model)) return formatSeedreamProSize(normalized)
     return formatSeedreamHighResSize(normalized)
   }
   if (isOpenAiGptImageModel(model)) {
@@ -2237,6 +2338,131 @@ async function callDashscopeTtsApi(input: GenerateMediaInput, fetchFn: typeof gl
   throw new Error(`${isQwenTts ? 'Qwen' : 'CosyVoice'} TTS 未返回音频数据`)
 }
 
+
+// ===== 协议族：volcengine-tts（火山语音 Seed Audio 1.0，HTTP 非流式） =====
+
+async function callVolcengineTtsApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+): Promise<GenerateMediaOutput> {
+  const { baseUrl, model } = input.config
+  if (!baseUrl) throw new Error('volcengine-tts 缺少 baseUrl')
+  const audioFormat = input.audioFormat ?? 'mp3'
+  const body: Record<string, unknown> = {
+    model,
+    text_prompt: input.prompt,
+  }
+  // speaker 与参考音频互斥：有参考音频时走参考音频生成模式，否则用 speaker（若提供）
+  if (references.length > 0) {
+    body.references = references.map((ref) => ({ audio_data: ref.base64 }))
+  } else if (input.voice?.trim()) {
+    body.speaker = input.voice.trim()
+  }
+  const audioConfig: Record<string, unknown> = {
+    format: audioFormat,
+    sample_rate: 24000,
+  }
+  if (input.speed !== undefined) audioConfig.speech_rate = input.speed
+  if (input.volume !== undefined) audioConfig.loudness_rate = input.volume
+  if (input.pitch !== undefined) audioConfig.pitch_rate = input.pitch
+  body.audio_config = audioConfig
+
+  const res = await fetchFn(`${baseUrl}/api/v3/tts/create`, {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': input.apiKey,
+      'X-Api-Request-Id': randomUUID(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: input.signal,
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`火山语音 TTS 失败 (${res.status}): ${text.slice(0, 300)}`)
+  }
+  const resp = (await safeParseJson(res, '火山语音 TTS')) as {
+    code?: number
+    message?: string
+    audio?: string
+    url?: string
+  }
+  // 火山语音 TTS 成功码为 3000，非 3000 视为错误
+  if (resp.code !== undefined && resp.code !== 3000) {
+    throw new Error(`火山语音 TTS 错误 (${resp.code}): ${resp.message ?? '未知错误'}`)
+  }
+  if (resp.audio) return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: resp.audio }] }
+  if (resp.url) return { images: [await downloadAsBase64(resp.url, fetchFn, input.signal, audioMimeForFormat(audioFormat))] }
+  throw new Error('火山语音 TTS 未返回音频数据')
+}
+
+// ===== 协议族：volcengine-plan-tts（火山 Agent Plan Seed TTS 2.0，HTTP 单向流式） =====
+
+async function callVolcenginePlanTtsApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+): Promise<GenerateMediaOutput> {
+  const { baseUrl, model } = input.config
+  if (!baseUrl) throw new Error('volcengine-plan-tts 缺少 baseUrl')
+  const audioFormat = input.audioFormat ?? 'mp3'
+  const body = {
+    req_params: {
+      text: input.prompt,
+      speaker: input.voice?.trim() || 'zh_female_gaolengyujie_uranus_bigtts',
+      audio_params: {
+        format: audioFormat,
+        sample_rate: 24000,
+      },
+    },
+  }
+  const res = await fetchFn(`${baseUrl}/api/v3/plan/tts/unidirectional`, {
+    method: 'POST',
+    headers: {
+      'X-Api-Key': input.apiKey,
+      'X-Api-Resource-Id': 'seed-tts-2.0',
+      'X-Api-Connect-Id': randomUUID(),
+      'Content-Type': 'application/json',
+      'Connection': 'keep-alive',
+    },
+    body: JSON.stringify(body),
+    signal: input.signal,
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Agent Plan TTS 失败 (${res.status}): ${text.slice(0, 300)}`)
+  }
+  // 响应为 NDJSON（每行一个 JSON），逐行解析拼接 base64 音频片段。
+  const rawText = await res.text()
+  const chunks: Buffer[] = []
+  let lastCode = 0
+  let lastMessage = ''
+  for (const line of rawText.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let parsed: { code?: number; data?: string; message?: string }
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      continue
+    }
+    if (parsed.data) {
+      chunks.push(Buffer.from(parsed.data, 'base64'))
+    }
+    if (typeof parsed.code === 'number') {
+      lastCode = parsed.code
+      if (parsed.message) lastMessage = parsed.message
+    }
+    // code=20000000 表示全部音频已返回完毕
+    if (parsed.code === 20000000) break
+  }
+  if (lastCode > 0 && lastCode !== 20000000) {
+    throw new Error(`Agent Plan TTS 错误 (${lastCode}): ${lastMessage || '未知错误'}`)
+  }
+  if (chunks.length === 0) throw new Error('Agent Plan TTS 未返回音频数据')
+  const combined = Buffer.concat(chunks).toString('base64')
+  return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: combined }] }
+}
 // ===== 协议族：dashscope-voice-clone（CosyVoice 声音复刻，两步） =====
 
 async function callDashscopeVoiceCloneApi(
