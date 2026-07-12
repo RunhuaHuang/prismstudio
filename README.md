@@ -219,6 +219,19 @@ npx -y prismstudio@latest webui
 }
 ```
 
+如果你的 agent 不支持直接粘贴 JSON，而是逐字段填写表单（如部分 GUI 客户端），按下面的对照填即可：
+
+| 字段 | 填写内容 |
+| --- | --- |
+| 名称 / Name | `prismstudio` |
+| 传输方式 / Type | `stdio` |
+| 命令 / Command | `npx -y prismstudio@latest` |
+| 环境变量 / Env | （留空） |
+
+> ⚠️ **关于超时（timeout）**：上面 JSON 里的 `timeoutMs: 1800000`（30 分钟）属于 **MCP 客户端**的配置项，不是环境变量，**无法写进 Env 字段**。表单模式下能否设置取决于你的 agent：
+> - 表单里有独立的 **Timeout** 字段 → 填 `1800000`。
+> - 没有 timeout 字段 → 该客户端只能用默认超时（常见 30 秒 / 60 秒），视频 / 音乐等长任务可能被提前切断。建议改用 **JSON 粘贴模式**（见上方代码块）来带上 `timeoutMs`。
+
 保存 MCP 配置后，**请重启 Claude Desktop / Cursor / Cline / Windsurf 等 agent**，让它重新加载 MCP server。重启后，就能在对话中让 agent 生成图片、视频、音频了。
 
 > `timeoutMs: 1800000` 表示让 agent 最多等待 30 分钟，推荐保留，避免视频 / 音乐等长任务被客户端 30 秒默认超时提前切断。如果你的 agent 不支持这个字段并报错，删除这一行即可。

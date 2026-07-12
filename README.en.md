@@ -219,8 +219,21 @@ For Claude Desktop, edit the config (macOS: `~/Library/Application Support/Claud
 }
 ```
 
+If your agent doesn’t accept pasted JSON and only offers a per-field form (some GUI clients do), fill it in like this:
+
+| Field | Value |
+| --- | --- |
+| Name | `prismstudio` |
+| Type | `stdio` |
+| Command | `npx -y prismstudio@latest` |
+| Env | (leave empty) |
+
 After saving the MCP config, **restart Claude Desktop / Cursor / Cline / Windsurf or your agent** so it reloads the MCP server. Then ask the agent to generate images, video, or audio right in the chat.
 
+> ⚠️ **About timeout**: `timeoutMs: 1800000` (30 min) in the JSON above is an **MCP client** setting, not an environment variable — it **cannot be put in the Env field**. Whether you can set it in form mode depends on your agent:
+> - If the form has a separate **Timeout** field → enter `1800000`.
+> - If there’s no timeout field → that client only uses its default timeout (often 30 s / 60 s), and long video / music jobs may be cut off. Prefer **JSON paste mode** (see the block above) so `timeoutMs` is included.
+>
 > `timeoutMs: 1800000` lets the agent wait up to 30 minutes. Keep it when your client supports it so video / music jobs are not cut off by a 30-second client-side default timeout. If your agent rejects this field, remove this line.
 >
 > If your agent offers a “Form / JSON” switch, choose **JSON** and paste the JSON copied from the WebUI wiring wizard; if the form asks for a type, choose `stdio`.

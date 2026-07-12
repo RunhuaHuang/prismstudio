@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-12
+
+### Added
+- WebUI 左上角品牌名正下方显示当前版本号，打开页面即可见（运行时从 `package.json` 读取，自动跟随发版）。
+- README 接入向导补充表单模式逐字段填写对照表（名称 / 传输方式 / 命令 / 环境变量），覆盖不支持粘贴 JSON 的 GUI 客户端；并说明 `timeoutMs` 无法写入环境变量、表单模式下的超时处理建议。
+
 ## [0.1.8] — 2026-07-12
 
 ### Added
@@ -91,7 +97,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.5...v0.1.8
 [0.1.5]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...v0.1.4

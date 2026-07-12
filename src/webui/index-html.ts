@@ -14,6 +14,24 @@
  * 所有交互通过 fetch 调用 /api/* REST 端点。
  */
 
+import { readFileSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/** 运行时从 package.json 读取版本号，与发版来源保持一致（唯一权威）。 */
+function readPackageVersion(): string {
+  try {
+    // dist/webui/index-html.js → 上两级到项目根
+    const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: unknown }
+    return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+const PRISM_VERSION = readPackageVersion()
+
 export const WEBUI_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -245,6 +263,7 @@ textarea{resize:vertical;line-height:1.6}
   flex-wrap:wrap;
 }
 .brand-mark{display:flex;align-items:baseline;gap:var(--space-md);flex-wrap:wrap}
+.brand-name{display:flex;flex-direction:column;gap:2px}
 .brand-logo{
   font-family:var(--font-mono);font-weight:700;font-size:var(--fs-display-lg);
   letter-spacing:-.04em;color:var(--text-primary);line-height:1;
@@ -252,6 +271,8 @@ textarea{resize:vertical;line-height:1.6}
 .brand-logo .dot{color:var(--signal)}
 .brand-tag{font-family:var(--font-mono);font-size:var(--fs-mono-sm);
   color:var(--text-secondary);letter-spacing:.05em}
+.brand-version{font-family:var(--font-mono);font-size:var(--fs-mono-xs);
+  color:var(--text-muted);letter-spacing:.12em;line-height:1}
 .device-id{
   font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-muted);
   letter-spacing:.1em;text-align:right;line-height:1.7;
@@ -480,7 +501,10 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
   <!-- ===== 顶栏：设备铭牌 ===== -->
   <header class="console-head">
     <div class="brand-mark">
-      <div class="brand-logo">PRISM<span class="dot">·</span>STUDIO</div>
+      <div class="brand-name">
+        <div class="brand-logo">PRISM<span class="dot">·</span>STUDIO</div>
+        <div class="brand-version">v${PRISM_VERSION}</div>
+      </div>
       <span class="brand-tag" x-text="t.brandTag"></span>
     </div>
     <div class="head-controls">
