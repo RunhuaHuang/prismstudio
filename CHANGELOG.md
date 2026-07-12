@@ -21,7 +21,15 @@
 - 参考文件路径校验改用真实路径，阻止符号链接逃逸；恢复 Windows 跨盘符绝对路径检查，避免绕过工作目录边界。
 - WebUI 拒绝把错误体、数组或其他非对象响应当作配置写回磁盘。
 
-## [0.1.4] — 2026-07-04
+## [0.1.5] - 2026-07-04
+
+### Added
+- 火山语音 TTS（豆包 Seed Audio 1.0）与 Agent Plan Seed TTS 2.0 协议支持，新增 `volcengine-tts` / `volcengine-plan-tts` 两个协议族。
+
+### Changed
+- 文档补充 MCP 客户端超时建议（三十分钟）与生成物落盘位置说明。
+
+## [0.1.4] - 2026-07-04
 
 ### Fixed
 - MiniMax 音乐 `audio_url` 结果下载改用独立 2 分钟下载超时，避免 5 分钟生成等待预算被下载阶段继续消耗。
@@ -84,7 +92,8 @@
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
 [Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...HEAD
-[0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...v0.1.8
+[0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.5...v0.1.8
+[0.1.5]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...v0.1.2
