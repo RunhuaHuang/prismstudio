@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import {
   generateMedia,
   resolveMediaConfig,
@@ -12,6 +12,8 @@ import {
   getLastGenerated,
   clearMediaGenerationSessionHistory,
   resolveDashscopeVideoVariant,
+  readReferenceFiles,
+  isPathWithinRoot,
 } from './media-generation-engine'
 import type { ResolvedMediaConfig } from './media-generation-engine'
 
@@ -787,6 +789,42 @@ describe('media-generation-engine · 图像 dashscope-async', () => {
       config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wanx2.1-t2i-turbo' }),
       fetchFn,
     })).rejects.toThrow('内容违规')
+  })
+
+  test('任务被取消（CANCELED）时立即报错而非轮询到超时', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { output: { task_id: 't1' } } },
+      { ok: true, json: { output: { task_status: 'CANCELED', message: '用户取消' } } },
+    ])
+    await expect(generateMedia({
+      modality: 'image', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wanx2.1-t2i-turbo' }),
+      fetchFn,
+    })).rejects.toThrow('任务失败 (CANCELED)')
+  })
+
+  test('任务状态为 UNKNOWN 时立即报错而非轮询到超时', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { output: { task_id: 't1' } } },
+      { ok: true, json: { output: { task_status: 'UNKNOWN', message: '上游状态异常' } } },
+    ])
+    await expect(generateMedia({
+      modality: 'image', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wanx2.1-t2i-turbo' }),
+      fetchFn,
+    })).rejects.toThrow('任务失败 (UNKNOWN)')
+  })
+
+  test('任务查询缺少 task_status 时立即报告协议错误', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { output: { task_id: 't1' } } },
+      { ok: true, json: { output: {} } },
+    ])
+    await expect(generateMedia({
+      modality: 'image', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wanx2.1-t2i-turbo' }),
+      fetchFn,
+    })).rejects.toThrow('缺少 task_status')
   })
 
   test('M1 修复：比例串 16:9 归一化为像素（万相 → 1280*720）', async () => {
@@ -2093,6 +2131,33 @@ describe('media-generation-engine · 音频', () => {
     expect(JSON.parse(calls4[0]!.body!).parameters.voice).toBe('Serena')
   })
 
+  test('dashscope-sync（CosyVoice）：speed 下发为 rate，不下发 speed（避免未知参数 400）', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([{ ok: true, json: { output: { audio: { data: 'BASE64AUDIO' } } } }])
+    await generateMedia({
+      modality: 'audio', prompt: '你好', apiKey: 'k', audioTask: 'tts', speed: 1.2,
+      config: makeImageConfig({ modality: 'audio', protocol: 'dashscope-sync', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'cosyvoice-v2', audioTask: 'tts' }),
+      fetchFn,
+    })
+    const params = JSON.parse(calls[0]!.body!).parameters
+    expect(params.rate).toBe(1.2)
+    expect(params.speed).toBeUndefined()
+  })
+
+  test('dashscope-sync（Qwen3-TTS）：speed 下发为 speed，不下发 rate（避免未知参数 400）', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { output: { audio: { url: 'https://x.com/a.wav' } } } },
+      { ok: true, headers: { 'content-type': 'audio/wav' } },
+    ])
+    await generateMedia({
+      modality: 'audio', prompt: '你好', apiKey: 'k', audioTask: 'tts', speed: 0.9,
+      config: makeImageConfig({ modality: 'audio', protocol: 'dashscope-sync', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'qwen3-tts-flash', audioTask: 'tts' }),
+      fetchFn,
+    })
+    const params = JSON.parse(calls[0]!.body!).parameters
+    expect(params.speed).toBe(0.9)
+    expect(params.rate).toBeUndefined()
+  })
+
   test('zhipu-async（GLM-TTS）：/audio/speech 同步返回二进制音频', async () => {
     const { fetchFn, calls } = makeSequencedFetch([{ ok: true, headers: { 'content-type': 'audio/wav' } }])
     const r = await generateMedia({
@@ -2727,6 +2792,123 @@ describe('media-generation-engine · 分派与缓存', () => {
     } finally {
       clearMediaGenerationSessionHistory('s1')
       clearMediaGenerationSessionHistory('s2')
+    }
+  })
+})
+
+// ===== 参考文件越界校验（readReferenceFiles 安全防线） =====
+describe('media-generation-engine · 参考文件路径安全', () => {
+  test('Windows 跨盘符路径被拒绝', () => {
+    expect(isPathWithinRoot('C:\\workspace', 'D:\\secret.png', win32)).toBe(false)
+    expect(isPathWithinRoot('C:\\workspace', 'C:\\workspace\\assets\\ref.png', win32)).toBe(true)
+  })
+
+  test('提供 cwd 时，cwd 外的绝对路径被拒绝', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prism-ref-cwd-'))
+    const outside = mkdtempSync(join(tmpdir(), 'prism-ref-out-'))
+    try {
+      const outsideFile = join(outside, 'secret.png')
+      writeFileSync(outsideFile, Buffer.from('secret'))
+      // 路径遍历尝试：绝对路径指向 cwd 外
+      const files = readReferenceFiles([outsideFile], cwd)
+      expect(files).toHaveLength(0)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('提供 cwd 时，cwd 内的合法文件被接受', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prism-ref-ok-'))
+    try {
+      const refFile = join(cwd, 'ref.png')
+      writeFileSync(refFile, Buffer.from('ok'))
+      const files = readReferenceFiles([refFile], cwd)
+      expect(files).toHaveLength(1)
+      expect(files[0]!.mediaType).toBe('image/png')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('cwd 内指向 cwd 外的符号链接被拒绝（防 realpath 绕过）', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prism-ref-link-cwd-'))
+    const outside = mkdtempSync(join(tmpdir(), 'prism-ref-link-out-'))
+    try {
+      const target = join(outside, 'secret.png')
+      writeFileSync(target, Buffer.from('secret'))
+      const linkPath = join(cwd, 'evil-link.png')
+      try {
+        symlinkSync(target, linkPath)
+      } catch {
+        // 某些 CI/Windows 无符号链接权限，跳过此测试
+        return
+      }
+      // 符号链接位于 cwd 内，但 realpath 解析后指向 cwd 外 → 必须拒绝
+      const files = readReferenceFiles([linkPath], cwd)
+      expect(files).toHaveLength(0)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test('不提供 cwd 时，任意绝对路径仍可读取（参考图为用户主动指定）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prism-ref-nocwd-'))
+    try {
+      const refFile = join(dir, 'ref.png')
+      writeFileSync(refFile, Buffer.from('ok'))
+      const files = readReferenceFiles([refFile])
+      expect(files).toHaveLength(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('cwd 传入但不存在时 fail-closed（拒绝读取，不静默放行）', () => {
+    // cwd 指向一个不存在的目录：realpath 失败，必须 fail-closed 返回空，
+    // 而非退化为「不校验」放行任意路径（否则安全防线形同虚设）。
+    const dir = mkdtempSync(join(tmpdir(), 'prism-ref-nocwd-exist-'))
+    try {
+      const refFile = join(dir, 'ref.png')
+      writeFileSync(refFile, Buffer.from('ok'))
+      const files = readReferenceFiles([refFile], join(dir, 'does-not-exist'))
+      expect(files).toHaveLength(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ===== 会话缓存 LRU 上限（evictOldestIfNeeded） =====
+describe('media-generation-engine · 会话缓存 LRU 淘汰', () => {
+  test('setLastGenerated 超过上限时淘汰最旧会话，重插刷新新鲜度', () => {
+    // 直接灌入超过 MAX_SESSION_CACHE_ENTRIES(256) 个不同 session，
+    // 验证：总量不超过上限；最旧被淘汰；重插已有 key 后该 key 成为最新不被淘汰。
+    const sessions: string[] = []
+    try {
+      // 灌入 300 个 session（超过 256 上限），每个写一条路径
+      for (let i = 0; i < 300; i++) {
+        const sid = `lru-sid-${i}`
+        sessions.push(sid)
+        setLastGenerated('image', sid, `/p/${i}.png`)
+      }
+      // session 0~43 应已被淘汰（300-256=44 个最旧被删）
+      expect(getLastGenerated('image', 'lru-sid-0')).toBeUndefined()
+      expect(getLastGenerated('image', 'lru-sid-43')).toBeUndefined()
+      // session 44~299 应仍存在
+      expect(getLastGenerated('image', 'lru-sid-44')).toBe('/p/44.png')
+      expect(getLastGenerated('image', 'lru-sid-299')).toBe('/p/299.png')
+
+      // 重插 lru-sid-44 使其成为最新，再灌一个新 session 触发淘汰：
+      // 此时最旧应变为 lru-sid-45（而非 lru-sid-44，因为它刚被刷新）
+      setLastGenerated('image', 'lru-sid-44', '/p/44-refreshed.png')
+      setLastGenerated('image', 'lru-newest', '/p/new.png')
+      expect(getLastGenerated('image', 'lru-sid-44')).toBe('/p/44-refreshed.png')
+      expect(getLastGenerated('image', 'lru-sid-45')).toBeUndefined()
+    } finally {
+      for (const sid of sessions) clearMediaGenerationSessionHistory(sid)
+      clearMediaGenerationSessionHistory('lru-newest')
     }
   })
 })

@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-07-12
+
+### Added
+- WebUI 为配置载入失败和辅助数据载入失败提供分级提示与就地重试。
+- 多轮会话缓存增加 256 条 LRU 上限，避免长驻 MCP Server 内存持续增长。
+
+### Fixed
+- DashScope 异步任务对取消、失败、缺失及未知状态立即给出明确错误，不再错误轮询到硬超时。
+- CosyVoice 与 Qwen3-TTS 分别使用官方 `rate` / `speed` 参数，避免未知参数导致请求失败。
+- Qwen Image 非法比例兜底使用正确的 `x` 尺寸分隔符。
+- WebUI 的状态和接入导出接口失败不再禁用配置保存，配置载入失败时则继续保持 fail-closed。
+- MiniMax 音乐生成继续使用独立内部超时，避免调用方短超时错误中断长任务。
+
+### Security
+- 参考文件路径校验改用真实路径，阻止符号链接逃逸；恢复 Windows 跨盘符绝对路径检查，避免绕过工作目录边界。
+- WebUI 拒绝把错误体、数组或其他非对象响应当作配置写回磁盘。
+
 ## [0.1.4] — 2026-07-04
 
 ### Fixed
@@ -66,7 +83,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...v0.1.8
 [0.1.4]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.1...v0.1.2

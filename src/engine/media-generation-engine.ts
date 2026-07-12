@@ -23,7 +23,7 @@
  * - M6：MiniMax 透传 n
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import { createHmac, randomUUID } from 'node:crypto'
 import {
@@ -723,22 +723,66 @@ export interface ReferenceFile {
   filename: string
 }
 
+/**
+ * 解析路径的真实绝对路径（解析符号链接）；文件不存在或无法解析时返回 null。
+ * 用于参考文件越界校验：必须基于 realpath 判定，否则 cwd 内指向敏感目录的软链可绕过校验。
+ */
+function resolveRealPathSafe(filePath: string): string | null {
+  try {
+    return realpathSync(filePath)
+  } catch {
+    return null
+  }
+}
+
+interface PathBoundaryOps {
+  relative(from: string, to: string): string
+  isAbsolute(path: string): boolean
+}
+
+/**
+ * 判断候选路径是否位于根目录内。pathOps 参数用于跨平台单元测试；生产环境使用当前平台实现。
+ */
+export function isPathWithinRoot(
+  allowedRoot: string,
+  candidatePath: string,
+  pathOps: PathBoundaryOps = { relative, isAbsolute },
+): boolean {
+  const rel = pathOps.relative(allowedRoot, candidatePath)
+  return rel !== '..'
+    && !rel.startsWith('../')
+    && !rel.startsWith('..\\')
+    && !pathOps.isAbsolute(rel)
+}
+
 export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile[] {
   const files: ReferenceFile[] = []
-  const allowedRoot = cwd ? resolve(cwd) : undefined
+  // 参考文件由用户/MCP agent 明确指定路径（如同「打开文件」语义），读取并发送给厂商是其
+  // 预期用途。当提供 cwd 时，额外做一层越界校验：把路径与 cwd 都 realpath 后比较，确保
+  // cwd 内的符号链接不会指向白名单外的敏感文件。cwd 缺失时不限制（参考图本就是任意路径）。
+  // 若 cwd 传入但 realpath 失败（目录不存在/权限不足），fail-closed 直接拒绝读取，
+  // 不静默退化为不校验（否则安全形同虚设）。
+  const allowedRoot = cwd ? resolveRealPathSafe(resolve(cwd)) : undefined
+  if (cwd && !allowedRoot) {
+    console.warn(`[Media Generation] cwd 无法解析，已拒绝读取参考文件: ${cwd}`)
+    return files
+  }
   for (const rawPath of paths) {
     try {
       const filePath = isAbsolute(rawPath) ? rawPath : resolve(cwd ?? process.cwd(), rawPath)
+      const realPath = resolveRealPathSafe(filePath)
+      if (!realPath) {
+        console.warn(`[Media Generation] 参考文件不存在: ${filePath}`)
+        continue
+      }
       if (allowedRoot) {
-        const rel = relative(allowedRoot, resolve(filePath))
-        if (rel === '..' || rel.startsWith('../') || rel.startsWith('..\\') || isAbsolute(rel)) {
+        // 用 realpath 后的路径做越界判定：否则 cwd 内一个指向 /etc 的软链会绕过
+        // relative() 校验，读到白名单外的敏感文件。allowedRoot 同样 realpath，
+        // 避免软链前缀不一致导致合法文件被误拒（macOS /var → /private/var）。
+        if (!isPathWithinRoot(allowedRoot, realPath)) {
           console.warn(`[Media Generation] 参考文件不在工作目录内，已拒绝: ${filePath}`)
           continue
         }
-      }
-      if (!existsSync(filePath)) {
-        console.warn(`[Media Generation] 参考文件不存在: ${filePath}`)
-        continue
       }
       const ext = extname(filePath).toLowerCase()
       const mimeType = EXT_TO_MIME[ext]
@@ -748,7 +792,7 @@ export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile
       }
       files.push({
         mediaType: mimeType,
-        base64: readFileSync(filePath).toString('base64'),
+        base64: readFileSync(realPath).toString('base64'),
         filename: filePath.split(/[\\/]/).pop() ?? 'reference.bin',
       })
     } catch (error) {
@@ -760,6 +804,21 @@ export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile
 
 // ===== 多轮状态缓存（按 modality + sessionId 隔离） =====
 
+/**
+ * 多轮状态缓存按 sessionId 隔离，长驻 MCP server 会累积大量会话（尤其含 base64 图片
+ * 的 Gemini 历史，单会话可达数 MB）。给每个会话级 Map 设全局 LRU 上限，超限时淘汰最旧
+ * 会话（Map 按插入序遍历，keys().next() 即最旧条目），避免内存无限增长。
+ */
+const MAX_SESSION_CACHE_ENTRIES = 256
+
+function evictOldestIfNeeded<V>(map: Map<string, V>, limit = MAX_SESSION_CACHE_ENTRIES): void {
+  while (map.size >= limit) {
+    const oldest = map.keys().next()
+    if (oldest.done) break
+    map.delete(oldest.value)
+  }
+}
+
 const lastGeneratedByModalitySession = new Map<string, string>()
 
 function cacheKey(modality: MediaModality, sessionId: string): string {
@@ -767,7 +826,10 @@ function cacheKey(modality: MediaModality, sessionId: string): string {
 }
 
 export function setLastGenerated(modality: MediaModality, sessionId: string, path: string): void {
-  lastGeneratedByModalitySession.set(cacheKey(modality, sessionId), path)
+  const key = cacheKey(modality, sessionId)
+  lastGeneratedByModalitySession.delete(key) // 删除后重插，使该 session 重新成为最新
+  evictOldestIfNeeded(lastGeneratedByModalitySession)
+  lastGeneratedByModalitySession.set(key, path)
 }
 
 export function getLastGenerated(modality: MediaModality, sessionId: string): string | undefined {
@@ -1219,6 +1281,9 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
     if (protocol === 'volcengine-plan-tts') return callVolcenginePlanTtsApi(input, fetchFn)
     if (protocol === 'zhipu-async') return callZhipuTtsApi(input, fetchFn)
     if (protocol === 'dashscope-sync') return callDashscopeTtsApi(input, fetchFn)
+    // 注意：generateMedia 入口已把所有 minimax+tts 改写成 minimax-tts-async，
+    // 正常流程不会走到这里。保留此分支作为防御兜底——若未来有同步 TTS 诉求，
+    // 只需在入口取消改写即可恢复同步路径，无需重建分派。
     if (protocol === 'minimax') return callMinimaxTtsApi(input, fetchFn)
     if (protocol === 'minimax-tts-async') return callMinimaxAsyncTtsApi(input, fetchFn)
     throw new Error(`TTS 不支持协议族: ${protocol}`)
@@ -1748,6 +1813,8 @@ async function callGeminiImageApi(
   // 自动清理：单会话历史超 40 条 content（约 20 轮对话）时，保留最近 40 条，
   // 避免长驻进程的 geminiSessionHistory 无限增长（含 base64 图片内存占用大）。
   const MAX_GEMINI_HISTORY = 40
+  geminiSessionHistory.delete(sessionId) // 重插以更新会话新鲜度（LRU）
+  evictOldestIfNeeded(geminiSessionHistory)
   geminiSessionHistory.set(
     sessionId,
     updatedHistory.length > MAX_GEMINI_HISTORY ? updatedHistory.slice(-MAX_GEMINI_HISTORY) : updatedHistory,
@@ -1797,7 +1864,9 @@ function formatDashscopeImageSize(size: string, model: string): string {
       '4:3': { w: 1024, h: 768 }, '3:4': { w: 768, h: 1024 }, '1:1': { w: 1024, h: 1024 },
     }
     const mapped = ratioMap[size.trim()]
-    if (!mapped) return '1024*1024' // 兜底正方形
+    // 兜底正方形：分隔符必须随 model 走（万相用 *，qwen-image 用 x），否则 qwen-image
+    // 传 1024*1024 会被 DashScope 拒收（与下方像素分支的分隔符约定保持一致）。
+    if (!mapped) return model.startsWith('wanx') || model.startsWith('wan2') ? '1024*1024' : '1024x1024'
     if (model.startsWith('wanx') || model.startsWith('wan2')) return `${mapped.w}*${mapped.h}`
     return `${mapped.w}x${mapped.h}`
   }
@@ -2179,6 +2248,12 @@ async function callDashscopeVideoApi(input: GenerateMediaInput, fetchFn: typeof 
   return pollTask(taskId, baseUrl, input.apiKey, fetchFn, input.signal, input.pollIntervalMs ?? POLL_INTERVAL_MS, VIDEO_POLL_TIMEOUT_MS, 'DashScope 视频', 'video/mp4')
 }
 
+const DASHSCOPE_ACTIVE_TASK_STATUSES = new Set(['PENDING', 'RUNNING', 'QUEUED', 'STARTING', 'PROCESSING'])
+const DASHSCOPE_FAILURE_TASK_STATUSES = new Set([
+  'FAILED', 'FAILURE', 'CANCELED', 'CANCELLED', 'ABORTED', 'TIMEOUT', 'TIMED_OUT',
+  'STOPPED', 'REJECTED', 'ERROR', 'UNKNOWN',
+])
+
 /** 通用 dashscope 任务轮询 */
 async function pollTask(
   taskId: string, baseUrl: string, apiKey: string,
@@ -2197,7 +2272,8 @@ async function pollTask(
     }
     const body = (await safeParseJson(res, label)) as DashscopeTaskResponse
     const status = body.output?.task_status
-    if (status === 'SUCCEEDED') {
+    const upperStatus = typeof status === 'string' ? status.trim().toUpperCase() : ''
+    if (upperStatus === 'SUCCEEDED') {
       const images: GeneratedImageData[] = []
       // 图像：output.results[].url / b64_image
       for (const r of body.output?.results ?? []) {
@@ -2211,7 +2287,16 @@ async function pollTask(
       if (images.length === 0) throw new Error(`${label} 任务成功但未返回内容`)
       return { images }
     }
-    if (status === 'FAILED') throw new Error(`${label} 任务失败: ${body.output?.message ?? body.output?.code ?? '未知错误'}`)
+    if (!upperStatus) throw new Error(`${label} 查询响应缺少 task_status: task_id=${taskId}`)
+
+    if (DASHSCOPE_ACTIVE_TASK_STATUSES.has(upperStatus)) continue
+
+    if (DASHSCOPE_FAILURE_TASK_STATUSES.has(upperStatus) || /FAIL|CANCEL|ABORT|ERROR|TIMEOUT|STOP|REJECT/.test(upperStatus)) {
+      throw new Error(`${label} 任务失败 (${status}): ${body.output?.message ?? body.output?.code ?? '未知错误'}`)
+    }
+
+    // 未知状态不应静默轮询到硬超时；直接暴露协议变化，便于及时适配厂商新增状态。
+    throw new Error(`${label} 返回未知任务状态 (${status}): task_id=${taskId}`)
   }
 }
 
@@ -2300,8 +2385,10 @@ async function callDashscopeTtsApi(input: GenerateMediaInput, fetchFn: typeof gl
     format: audioFormat
   }
   if (input.speed !== undefined) {
-    parameters.speed = input.speed
-    parameters.rate = input.speed
+    // qwen3-tts 官方字段是 speed；CosyVoice 官方字段是 rate。两者各发各的字段，
+    // 避免对某一方下发未知参数触发 DashScope 400（该平台对未知参数校验较严格）。
+    if (isQwenTts) parameters.speed = input.speed
+    else parameters.rate = input.speed
   }
   if (input.volume !== undefined) parameters.volume = input.volume
   if (input.pitch !== undefined) parameters.pitch = input.pitch
@@ -3196,6 +3283,10 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
   const { baseUrl, model } = input.config
   if (!baseUrl) throw new Error('minimax 缺少 baseUrl')
 
+  // 音乐生成使用独立的内部超时 signal，不复用调用方的 signal：
+  // 音乐生成通常需要 30-120s，调用方若为短请求设置了短超时 signal 并已 abort，
+  // 直接复用会导致音乐生成被错误打断。音乐生成有自己的 MUSIC_SYNC_TIMEOUT_MS 保护。
+  // 调用方主动取消的语义目前由 MCP 协议层（cancellation notification）处理，不经过此 signal。
   const timeout = createInternalTimeoutSignal(MUSIC_SYNC_TIMEOUT_MS)
   const musicSignal = timeout.signal
   try {
@@ -4014,7 +4105,11 @@ async function callGoogleOmniVideoApi(
   if (body.error) throw new Error(`Google Omni 视频生成失败: ${body.error.message ?? body.error.status ?? '未知错误'}`)
 
   const interactionId = body.id ?? body.name
-  if (interactionId) googleOmniInteractionHistory.set(sessionId, interactionId)
+  if (interactionId) {
+    googleOmniInteractionHistory.delete(sessionId) // 重插以更新会话新鲜度（LRU）
+    evictOldestIfNeeded(googleOmniInteractionHistory)
+    googleOmniInteractionHistory.set(sessionId, interactionId)
+  }
 
   const outputs = collectGoogleOmniVideos(body)
   const videos: GeneratedImageData[] = []

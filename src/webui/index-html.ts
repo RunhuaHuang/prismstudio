@@ -499,6 +499,22 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
     </div>
   </header>
 
+  <!-- 配置载入失败是写入阻断错误：禁止保存，并允许就地重试。 -->
+  <div class="load-error-banner" x-show="loadError" x-cloak x-transition
+       role="alert" style="background:var(--surface-3);color:var(--error);border:1px solid var(--error);padding:14px 20px;margin:0;border-radius:0 0 12px 12px;font-size:14px;display:flex;gap:10px;align-items:center;">
+    <span style="font-size:18px;">⚠</span>
+    <span x-text="t.loadFailed + ' ' + loadError"></span>
+    <button class="icon-btn" style="margin-left:auto;width:auto;padding:0 12px;" @click="retryConfigLoad()" :disabled="retryingLoad" x-text="retryingLoad ? t.retrying : t.retry"></button>
+  </div>
+
+  <!-- 非关键载入告警：预设/状态/导出失败不影响已安全载入的配置写入。 -->
+  <div class="load-error-banner" x-show="auxLoadErrorText()" x-cloak x-transition
+       role="status" style="background:var(--surface-2);color:var(--warn);border:1px solid var(--warn);padding:10px 20px;margin:0;border-radius:0 0 12px 12px;font-size:13px;display:flex;gap:10px;align-items:center;">
+    <span style="font-size:16px;">⚠</span>
+    <span x-text="t.partialLoadFailed + ' ' + auxLoadErrorText()"></span>
+    <button class="icon-btn" style="margin-left:auto;width:auto;padding:0 12px;" @click="retryAuxiliaryLoads()" :disabled="retryingAux" x-text="retryingAux ? t.retrying : t.retry"></button>
+  </div>
+
   <!-- ===== 导航 ===== -->
   <nav class="nav-bar">
     <button class="nav-tab" :class="tab==='config' && 'active'" @click="tab='config'">
@@ -603,7 +619,7 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
         <input type="text" x-model="config.outputDir" :placeholder="t.phOutputDir" />
       </div>
       <div class="save-bar">
-        <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">
+        <button class="btn btn-primary" @click="saveConfig()" :disabled="saving || !!loadError">
           <span x-show="!saving" x-text="t.btnCommit"></span>
           <span x-show="saving" x-text="t.btnCommitting"></span>
         </button>
@@ -729,7 +745,7 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 
       <div class="agent-grid">
         <template x-for="a in agents" :key="a.id">
-          <button class="agent-chip" :class="exportAgent===a.id && 'active'" @click="exportAgent=a.id; loadExport()" x-text="a.label"></button>
+          <button class="agent-chip" :class="exportAgent===a.id && 'active'" @click="exportAgent=a.id; refreshExport()" x-text="a.label"></button>
         </template>
       </div>
 
@@ -856,6 +872,9 @@ function prismApp() {
         btnCommit: '▸ 提交配置', btnCommitting: '提交中…',
         committed: '✓ 已提交', commitFailed: '提交失败',
         autosaved: '✓ 已自动保存',
+        loadFailed: '配置载入失败，已禁止保存以保护现有配置：',
+        partialLoadFailed: '部分辅助信息载入失败，不影响配置保存：',
+        retry: '重试', retrying: '重试中…',
         pgTitle: '◢ 信号发生器',
         labelPrompt: '提示词', promptSuffix: '/ 文本', phPrompt: '描述要生成的内容…',
         labelCount: '数量', labelSize: '尺寸', labelDuration: '时长（秒）',
@@ -895,6 +914,9 @@ function prismApp() {
         btnCommit: '▸ Commit Config', btnCommitting: 'committing…',
         committed: '✓ COMMITTED', commitFailed: 'commit failed',
         autosaved: '✓ autosaved',
+        loadFailed: 'Config failed to load. Saving is disabled to protect existing data:',
+        partialLoadFailed: 'Some auxiliary data failed to load. Config saving remains available:',
+        retry: 'Retry', retrying: 'Retrying…',
         pgTitle: '◢ Signal Generator',
         labelPrompt: 'Prompt', promptSuffix: '/ Text', phPrompt: 'describe what to generate…',
         labelCount: 'Count', labelSize: 'Size', labelDuration: 'Duration (s)',
@@ -1024,6 +1046,10 @@ function prismApp() {
     presets: { image: [], video: [], audio: [] },
     status: {},
     saving: false, saveMsg: '', saveErr: false,
+    // 只有配置载入失败才阻断写入；预设、状态和导出各自降级，不牵连配置保存。
+    loadError: '',
+    presetsError: '', statusError: '', exportError: '',
+    retryingLoad: false, retryingAux: false,
 
     test: { modality: 'image', prompt: '', size: '', numberOfImages: 1, duration: 5, task: 'tts', voice: '', tempKey: '' },
     testing: false, testResult: null, testError: '',
@@ -1063,10 +1089,31 @@ function prismApp() {
 
     async init() {
       this.applyTheme();
-      // 先加载 presets，后续按 vendor 共享 API Key 需要用 presetId 反查 vendor。
-      await this.loadPresets();
-      await Promise.all([this.loadConfig(), this.loadStatus()]);
-      this.loadExport();
+      await this.loadInitialData();
+    },
+    async loadInitialData() {
+      // 预设优先载入，供配置中的 vendor API Key 记忆逻辑使用；失败时允许配置继续载入。
+      try {
+        await this.loadPresets();
+        this.presetsError = '';
+      } catch (e) {
+        this.presetsError = (e && e.message) ? e.message : String(e);
+      }
+
+      try {
+        await this.loadConfig();
+        this.loadError = '';
+      } catch (e) {
+        // 只有配置本体未安全载入时才禁止写入，防止默认 stub 覆盖磁盘配置。
+        this.loadError = (e && e.message) ? e.message : String(e);
+        return;
+      }
+
+      this.installAutoSaveWatchers();
+      await Promise.all([this.refreshStatus(), this.refreshExport()]);
+    },
+    installAutoSaveWatchers() {
+      if (this._watchersInstalled) return;
       // 配置载入完成后，开启自动保存监听。loadConfig 末尾把 _loaded 置 true。
       // 监听每个模态的关键字段 + outputDir，任一变化即 debounce 自动保存。
       const watchedPaths = [];
@@ -1079,35 +1126,93 @@ function prismApp() {
       for (const p of watchedPaths) {
         this.$watch(p, () => this.scheduleAutoSave());
       }
+      this._watchersInstalled = true;
+    },
+    async retryConfigLoad() {
+      if (this.retryingLoad) return;
+      this.retryingLoad = true;
+      try { await this.loadInitialData(); }
+      finally { this.retryingLoad = false; }
+    },
+    auxLoadErrorText() {
+      return [this.presetsError, this.statusError, this.exportError].filter(Boolean).join(' · ');
+    },
+    async retryAuxiliaryLoads() {
+      if (this.retryingAux) return;
+      this.retryingAux = true;
+      try {
+        await Promise.all([
+          (async () => {
+            try { await this.loadPresets(); this.presetsError = ''; }
+            catch (e) { this.presetsError = (e && e.message) ? e.message : String(e); }
+          })(),
+          this.refreshStatus(),
+          this.refreshExport(),
+        ]);
+      } finally {
+        this.retryingAux = false;
+      }
     },
     async loadConfig() {
       this._restoring = true;
-      const r = await fetch('/api/config'); this.config = await r.json();
-      for (const k of ['image','video','audio']) {
-        if (!this.config[k]) this.config[k] = {enabled:false, presetId:'', apiKey:''};
-        // 确保 key 记忆 map 存在：byVendor 是新逻辑，byPreset 是历史兼容字段。
-        if (!this.config[k].apiKeyByVendor) this.config[k].apiKeyByVendor = {};
-        if (!this.config[k].apiKeyByPreset) this.config[k].apiKeyByPreset = {};
-        // 记录初始 preset 到内存（不存 config.json，避免污染配置文件）
-        this._lastPreset[k] = this.config[k].presetId;
-        // 注意：GET 返回的顶层 apiKey 与 map 都是脱敏占位（含 ****）。
-        // 仅当记忆 map 里有真实（非脱敏）值时，用它覆盖顶层；否则保留脱敏占位（用户重填时再存）。
-        const pid = this.config[k].presetId;
-        const remembered = this.rememberedApiKeyForPreset(k, pid);
-        if (pid && remembered && !remembered.includes('****') && this.config[k].apiKey.includes('****')) {
-          this.config[k].apiKey = remembered;
+      try {
+        const r = await fetch('/api/config');
+        if (!r.ok) throw new Error(this.t.commitFailed + ' (' + r.status + ')');
+        const data = await r.json();
+        // 服务器错误体或非对象响应不能当 config 使用，否则可能把默认 stub 覆盖回磁盘。
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) {
+          throw new Error(data?.error || this.t.commitFailed);
         }
+        this.config = data;
+        for (const k of ['image','video','audio']) {
+          if (!this.config[k] || typeof this.config[k] !== 'object' || Array.isArray(this.config[k])) this.config[k] = {enabled:false, presetId:'', apiKey:''};
+          // 确保 key 记忆 map 存在：byVendor 是新逻辑，byPreset 是历史兼容字段。
+          if (!this.config[k].apiKeyByVendor || typeof this.config[k].apiKeyByVendor !== 'object') this.config[k].apiKeyByVendor = {};
+          if (!this.config[k].apiKeyByPreset || typeof this.config[k].apiKeyByPreset !== 'object') this.config[k].apiKeyByPreset = {};
+          if (typeof this.config[k].apiKey !== 'string') this.config[k].apiKey = '';
+          // 记录初始 preset 到内存（不存 config.json，避免污染配置文件）
+          this._lastPreset[k] = this.config[k].presetId;
+          // 注意：GET 返回的顶层 apiKey 与 map 都是脱敏占位（含 ****）。
+          // 仅当记忆 map 里有真实（非脱敏）值时，用它覆盖顶层；否则保留脱敏占位（用户重填时再存）。
+          const pid = this.config[k].presetId;
+          const remembered = this.rememberedApiKeyForPreset(k, pid);
+          if (pid && remembered && !remembered.includes('****') && this.config[k].apiKey.includes('****')) {
+            this.config[k].apiKey = remembered;
+          }
+        }
+      } catch (e) {
+        this._restoring = false;
+        throw e;
       }
       // 配置已就绪，开启自动保存（下一帧后解除 _restoring，避免回填触发的 watch 事件）
       this.$nextTick(() => { this._loaded = true; this._restoring = false; });
     },
     async loadPresets() {
-      const r = await fetch('/api/presets'); this.presets = await r.json();
+      const r = await fetch('/api/presets');
+      if (!r.ok) throw new Error('加载模型预设失败 (' + r.status + ')');
+      const data = await r.json();
+      if (!data || data.error) throw new Error(data?.error || '加载模型预设失败');
+      this.presets = data;
     },
     async loadStatus() {
-      const r = await fetch('/api/status'); this.status = await r.json();
+      const r = await fetch('/api/status');
+      if (!r.ok) throw new Error('加载状态失败 (' + r.status + ')');
+      const data = await r.json();
+      if (!data || data.error) throw new Error(data?.error || '加载状态失败');
+      this.status = data;
+    },
+    async refreshStatus() {
+      try { await this.loadStatus(); this.statusError = ''; }
+      catch (e) { this.statusError = (e && e.message) ? e.message : String(e); }
     },
     async saveConfig() {
+      // 载入未完成时禁止手动保存：此时 this.config 可能是残缺 stub，
+      // PUT 会把磁盘真实配置覆盖清空（与 scheduleAutoSave 的护栏一致）。
+      if (this.loadError) {
+        this.saveErr = true; this.saveMsg = '✗ ' + (this.t.loadFailed || '配置未载入完成，请刷新页面重试');
+        setTimeout(() => this.saveMsg = '', 4000);
+        return;
+      }
       this.saving = true; this.saveMsg = ''; this.saveErr = false;
       // 保存前：把每个模态当前顶层 apiKey 同步进 vendor/preset 记忆（避免未切换就改的 key 丢失）
       for (const k of ['image','video','audio']) {
@@ -1117,11 +1222,11 @@ function prismApp() {
         const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || this.t.commitFailed);
-        // 回填服务器返回的脱敏配置——置 _restoring 防止 watch 触发循环自动保存
+        // 回填服务器返回的脱敏配置--置 _restoring 防止 watch 触发循环自动保存
         this._restoring = true;
         this.config = data.config; this.saveMsg = this.t.committed;
         this.$nextTick(() => { this._restoring = false; });
-        await this.loadStatus();
+        await this.refreshStatus();
       } catch (e) { this.saveErr = true; this.saveMsg = '✗ ' + e.message; }
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
     },
@@ -1132,9 +1237,11 @@ function prismApp() {
      */
     _autoSaveTimer: null,
     _restoring: false,
+    _watchersInstalled: false,
     scheduleAutoSave() {
-      // 首次载入回填阶段不触发；保存后从服务器回填配置时也不触发（防循环）
-      if (!this._loaded || this._restoring) return;
+      // 首次载入回填阶段不触发；保存后从服务器回填配置时也不触发（防循环）；
+      // 载入失败时也不触发（避免在 config 半就绪时把残缺数据覆盖写回磁盘）。
+      if (!this._loaded || this._restoring || this.loadError) return;
       clearTimeout(this._autoSaveTimer);
       this._autoSaveTimer = setTimeout(() => this.silentSave(), 800);
     },
@@ -1151,7 +1258,7 @@ function prismApp() {
         this._restoring = true;
         this.config = data.config;
         this.$nextTick(() => { this._restoring = false; });
-        await this.loadStatus();
+        await this.refreshStatus();
         // 极轻量的已保存提示，2s 自动消失
         this.saveMsg = this.t.autosaved || '✓ 已自动保存'; this.saveErr = false;
         setTimeout(() => { if (this.saveMsg === (this.t.autosaved || '✓ 已自动保存')) this.saveMsg = ''; }, 2000);
@@ -1233,8 +1340,15 @@ function prismApp() {
     },
     async loadExport() {
       const r = await fetch('/api/export?agent=' + this.exportAgent);
-      this.exportData = await r.json();
+      if (!r.ok) throw new Error('加载接入配置失败 (' + r.status + ')');
+      const data = await r.json();
+      if (!data || typeof data !== 'object' || data.error || !data.config) throw new Error(data?.error || '加载接入配置失败');
+      this.exportData = data;
       this.exportText = JSON.stringify(this.exportData.config, null, 2);
+    },
+    async refreshExport() {
+      try { await this.loadExport(); this.exportError = ''; }
+      catch (e) { this.exportError = (e && e.message) ? e.message : String(e); }
     },
     async copyExport() {
       try { await navigator.clipboard.writeText(this.exportText); this.copied = true; setTimeout(() => this.copied = false, 2000); }
