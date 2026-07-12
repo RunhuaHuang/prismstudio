@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-13
+
+### Added
+- WebUI API Key 输入框新增眼睛图标切换明文 / 隐藏（主配置与试用台临时密钥），SVG 图标、与输入框等高对齐。
+- WebUI 选中模型后只读展示完整请求地址（含协议路径后缀，如 `/images/generations`），以及接口协议可读名，供自定义时参考。
+- WebUI 自定义模式「协议」由纯文本框改为人类可读下拉（如「OpenAI 兼容」「火山方舟（异步）」），后台映射到内部协议名。
+- 火山引擎（豆包）接入按鉴权方式拆分为三个独立 vendor：火山 API（普通方舟 Ark）、火山 Agent Plan（Agent Plan 独立 key）、火山语音（语音服务 key），下拉分组清晰、API Key 互不覆盖。
+
+### Fixed
+- 修复 `PROTOCOL_ENDPOINT_PATH` 对 `dashscope-async` 等多模态协议显示错误路径（video 误显 image 路径）；改为协议 × 模态二维映射。
+- 修复自定义模式 BaseURL 输入框在端点改只读后丢失的回归。
+- 修复 `displayEndpoint` 内正则反斜杠在模板字符串中转义丢失导致 WebUI 整页白屏（SyntaxError）。
+
+### Changed
+- WebUI 容器宽度由 1080px 拓宽到 1400px，下拉项模型名优先占满、协议标签可省略，大幅减少长模型名被截断。
+- 清理失效的 BaseURL 可编辑输入框相关死代码（i18n / CSS / helper）。
+
 ## [0.2.0] — 2026-07-12
 
 ### Added
@@ -97,7 +114,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.5...v0.1.8
 [0.1.5]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.4...v0.1.5

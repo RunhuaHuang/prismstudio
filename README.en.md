@@ -66,7 +66,7 @@ Zero-code wiring: the WebUI wizard copies a `mcpServers` JSON snippet in one cli
 ### And more
 
 - **Full multimodal coverage**: text-to-image, image editing, text-to-video, image-to-video, TTS, music generation, voice cloning
-- **Built-in WebUI**: config console + playground + wiring wizard in one — zero config, no hand-written JSON
+- **Built-in WebUI**: config console + playground + wiring wizard in one — zero config, no hand-written JSON; API Key eye-toggle, full request URL and protocol shown at a glance
 - **Dynamic tool exposure**: only configured modalities expose their tool — no dead-shell tools
 - **Local-first**: credentials stored in plaintext at `~/.prismstudio/config.json`, WebUI binds only to `127.0.0.1`, nothing is ever uploaded
 
@@ -83,7 +83,7 @@ Prismstudio encapsulates each `modality × vendor` pair into one of 14 protocol 
 | OpenAI | gpt-image-1 / 2 | T2I, reference-image editing, transparent background |
 | Google Gemini | flash / flash-lite / pro (nano-banana) | T2I, multi-turn editing, aspect ratio & resolution |
 | Google Vertex | flash / flash-lite / pro | Same as Gemini, via Vertex AI quota |
-| Doubao | Seedream (4 / 4.5 / 5 / 5-Lite) | High-quality Chinese images |
+| Doubao | Seedream (4 / 4.5 / 5 / 5-Lite) | High-quality Chinese images; also available via Agent Plan (separate auth) |
 | Zhipu | GLM-Image, CogView-4 | Chinese open-source ecosystem |
 | MiniMax | image-01 | Single-image generation |
 | Tongyi Wanxiang | Qwen-Image, Plus / Max / 2-Pro | Alibaba Cloud images |
@@ -97,7 +97,7 @@ Prismstudio encapsulates each `modality × vendor` pair into one of 14 protocol 
 | Vendor | Models | Capabilities |
 |---|---|---|
 | Zhipu | CogVideoX 2 / 3 / Flash | Chinese open-source video |
-| Doubao | Seedance (1.5-pro / 2 / 2-fast / 2-mini) | ByteDance video |
+| Doubao | Seedance (1.5-pro / 2 / 2-fast / 2-mini) | ByteDance video; also available via Agent Plan (separate auth) |
 | Kling | Kling v2 | High-quality Chinese video |
 | MiniMax | video-01 | Video generation |
 | Wanxiang | wan2.7-t2v, wan2.7-videoedit | T2V, video editing |
@@ -336,6 +336,8 @@ Located at `~/.prismstudio/config.json` (override with `PRISMSTUDIO_CONFIG`):
 ```
 
 > **Per-vendor key memory**: each modality remembers API keys by vendor (stored in `apiKeyByVendor`, with backward compatibility for `apiKeyByPreset`). Switching models under the same vendor within one modality does not require re-entering the key; image / video / audio do not have to share keys.
+>
+> **Volcengine access groups**: due to different auth, Volcengine is split into three separate vendors in the config console: **Volcengine API** (standard Ark key), **Volcengine Agent Plan** (independent Agent Plan key), **Volcengine Speech** (speech service key). Each group remembers its own key without cross-overwriting.
 
 > **Security**: credentials are stored in plaintext (consistent with MCP ecosystem convention). The WebUI binds only to `127.0.0.1`, loads no third-party CDN scripts/fonts, and uses security headers plus Origin / Sec-Fetch-Site / JSON Content-Type checks to reduce local cross-site request risk. Manage file permissions yourself in production. See [SECURITY.md](SECURITY.md).
 

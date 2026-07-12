@@ -169,7 +169,7 @@ body::after{
 .mono{font-family:var(--font-mono);font-feature-settings:"ss01","ss02"}
 
 /* ===== 通用控件 ===== */
-.wrap{max-width:1080px;margin:0 auto;padding:var(--space-xl) var(--space-lg) var(--space-2xl)}
+.wrap{max-width:1400px;margin:0 auto;padding:var(--space-xl) var(--space-lg) var(--space-2xl)}
 
 .label{font-family:var(--font-mono);font-size:var(--fs-mono-xs);font-weight:500;
   letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
@@ -231,8 +231,8 @@ textarea{resize:vertical;line-height:1.6}
   font-family:var(--font-mono);font-size:var(--fs-mono-md);color:var(--text-secondary);
   transition:background .1s,color .1s;
 }
-.cmd-item .cmd-item-main{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cmd-item .cmd-item-tag{flex-shrink:0;font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.04em}
+.cmd-item .cmd-item-main{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cmd-item .cmd-item-tag{flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:30%;font-size:var(--fs-mono-xs);color:var(--text-dim);letter-spacing:.04em}
 .cmd-item:hover,.cmd-item.kb-active{background:var(--signal-glow);color:var(--text-primary)}
 .cmd-item.kb-active{box-shadow:inset 2px 0 0 var(--signal)}
 .cmd-item.selected{color:var(--signal)}
@@ -341,6 +341,17 @@ textarea{resize:vertical;line-height:1.6}
 .ch-field .label{display:block;margin-bottom:var(--space-xs)}
 .ch-help{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);
   margin-top:var(--space-xs);line-height:1.5;word-break:break-all}
+.endpoint-display{
+  width:100%;background:var(--surface-2);border:1px solid var(--line);color:var(--text-secondary);
+  padding:var(--space-sm) var(--space-md);border-radius:var(--radius);
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);line-height:1.5;
+  word-break:break-all;resize:none;cursor:default;
+}
+.proto-readonly{
+  font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--text-secondary);
+  padding:var(--space-sm) var(--space-md);background:var(--surface-2);
+  border:1px solid var(--line);border-radius:var(--radius);
+}
 
 /* 开关：拨杆式 */
 .toggle{display:inline-flex;align-items:center;gap:var(--space-sm);cursor:pointer}
@@ -483,6 +494,13 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 }
 .icon-btn:hover{border-color:var(--signal-dim);color:var(--signal)}
 
+/* ===== 密钥输入框 + 眼睛切换 ===== */
+.key-input-wrap{display:flex;align-items:stretch;gap:var(--space-xs)}
+.key-input-wrap input{flex:1;width:1%;min-width:0}
+/* 按钮跟随输入框高度（覆盖 .icon-btn 的固定 30px 高），宽度保持正方形 */
+.key-toggle{align-self:stretch;width:42px;height:auto;padding:0}
+.key-toggle svg{width:18px;height:18px}
+
 /* 进入动画 */
 [x-cloak]{display:none!important}
 .fade-enter{animation:fadeIn .3s ease}
@@ -605,8 +623,19 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
           <div class="ch-field">
             <span class="label" x-text="isGoogleCloud(m.key) ? t.labelGcpJson : t.labelApiKey"></span>
             <template x-if="!isGoogleCloud(m.key)">
-              <input type="password" x-model="config[m.key].apiKey"
-                :placeholder="config[m.key]?.apiKey?.includes('****') ? t.phKeyStored : t.phKeyPaste" />
+              <div class="key-input-wrap">
+                <input :type="showKey[m.key] ? 'text' : 'password'" x-model="config[m.key].apiKey"
+                  :placeholder="config[m.key]?.apiKey?.includes('****') ? t.phKeyStored : t.phKeyPaste" />
+                <button type="button" class="icon-btn key-toggle"
+                  @click="showKey[m.key] = !showKey[m.key]"
+                  :title="showKey[m.key] ? t.hideKey : t.showKey"
+                  :aria-label="showKey[m.key] ? t.hideKey : t.showKey">
+                  <!-- 睁眼：明文显示中 -->
+                  <svg x-show="showKey[m.key]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <!-- 闭眼：隐藏中 -->
+                  <svg x-show="!showKey[m.key]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61"/><path d="M2 2l20 20"/></svg>
+                </button>
+              </div>
             </template>
             <template x-if="isGoogleCloud(m.key)">
               <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;width:100%">
@@ -624,12 +653,41 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
             </template>
           </div>
 
+          <!-- 完整请求地址（只读展示，引擎最终请求打到的地址） -->
+          <div class="ch-field">
+            <span class="label" x-text="t.labelEndpoint"></span>
+            <textarea readonly rows="2" class="endpoint-display"
+              x-text="displayEndpoint(m.key)"
+              :placeholder="t.phNoEndpoint"></textarea>
+          </div>
+
+          <!-- 协议（只读展示，custom 模式见下方可编辑下拉） -->
+          <div class="ch-field" x-show="config[m.key].presetId !== 'custom' && protocolDisplayLabel(m.key)">
+            <span class="label" x-text="t.labelProtocol"></span>
+            <div class="proto-readonly" x-text="protocolDisplayLabel(m.key)"></div>
+          </div>
+
           <template x-if="config[m.key].presetId === 'custom'">
             <div class="ch-field">
               <span class="label" x-text="t.labelModelProto"></span>
               <input type="text" x-model="config[m.key].model" :placeholder="t.phModel" style="margin-bottom:6px" />
-              <input type="text" x-model="config[m.key].protocol" :placeholder="t.phProtocol" style="margin-bottom:6px" />
-              <input type="text" x-model="config[m.key].baseUrl" :placeholder="t.phBaseUrl" />
+              <input type="text" x-model="config[m.key].baseUrl" :placeholder="t.phCustomBaseUrl" style="margin-bottom:6px" />
+              <div class="cmd-select" x-data="dropdown(protocolDropdownConfig(m.key))"
+                   @select="onProtocolSelect(m.key, $event)">
+                <button type="button" class="cmd-trigger" @click="toggle" @keydown="onKeydown"
+                        :aria-expanded="open">
+                  <span class="cmd-val" :class="isPlaceholder && 'placeholder'" x-text="triggerLabel"></span>
+                  <span class="cmd-chev">▾</span>
+                </button>
+                <div class="cmd-menu" x-show="open" @click.away="close">
+                  <template x-for="item in groups[0].items" :key="item.value">
+                    <div class="cmd-item" :class="{ selected: selectedVal===item.value, 'kb-active': isKbActive(item) }"
+                         @click="pick(item)" @mouseenter="kbIndex = _flat.findIndex(x => x.value === item.value)">
+                      <span class="cmd-item-main" x-text="item.label"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
             </div>
           </template>
         </div>
@@ -715,7 +773,16 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 
         <div style="margin-top:var(--space-lg)">
           <span class="label"><span x-text="t.labelTempKey"></span> <span style="text-transform:none;color:var(--text-dim)" x-text="t.tempKeyHint"></span></span>
-          <input type="password" x-model="test.tempKey" :placeholder="t.phTempKey" />
+          <div class="key-input-wrap">
+            <input :type="showTempKey ? 'text' : 'password'" x-model="test.tempKey" :placeholder="t.phTempKey" />
+            <button type="button" class="icon-btn key-toggle"
+              @click="showTempKey = !showTempKey"
+              :title="showTempKey ? t.hideKey : t.showKey"
+              :aria-label="showTempKey ? t.hideKey : t.showKey">
+              <svg x-show="showTempKey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg x-show="!showTempKey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61"/><path d="M2 2l20 20"/></svg>
+            </button>
+          </div>
         </div>
 
         <button class="btn btn-primary" style="margin-top:var(--space-lg);width:100%;justify-content:center"
@@ -791,6 +858,90 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 </div>
 
 <script>
+// 协议 × 模态 → 主提交请求路径后缀（引擎实际拼接的路径，供展示"完整请求地址"用）。
+// 多模态协议（dashscope-async / zhipu-async / minimax）按模态给出不同路径；
+// 动态路径（Gemini 走 GCP token 交换、dashscope-sync 按 model 分两路）留空，展示时退化为只显示 baseUrl。
+const PROTOCOL_ENDPOINT_PATH = {
+  'openai-images': { image: '/images/generations' },
+  'gemini-generate-content': {},                 // 动态：buildGoogleGenerateContentRequestTarget 构造
+  'dashscope-async': { image: '/services/aigc/image-generation/generation', video: '/services/aigc/video-generation/video-synthesis' },
+  'minimax': { image: '/image_generation', video: '/video_generation', audio: '/t2a_v2' },
+  'stability': {},                               // baseUrl 本身已含完整路径 + /{model}
+  'tencent-hunyuan-async': {},                   // 动态：按图/视频 + 路径前缀
+  'midjourney': { image: '/mj/submit/imagine' },
+  'volcengine-async': { video: '/contents/generations/tasks' },
+  'kling-async': { video: '/v1/videos/text2video' },
+  'zhipu-async': { image: '/images/generations', video: '/videos/generations', audio: '/audio/speech' },
+  'google-interactions': {},                     // 动态 GCP
+  'volcengine-tts': { audio: '/api/v3/tts/create' },
+  'volcengine-plan-tts': { audio: '/api/v3/plan/tts/unidirectional' },
+  'dashscope-sync': {},                          // 动态：按 model 选 multimodal-generation 或 text2audio
+  'minimax-tts-async': { audio: '/t2a_async_v2' },
+  'minimax-voice-clone': { audio: '/voice_clone' },
+};
+
+// custom 模式协议可读名映射：label 人类可读，value 为内部 protocol（引擎分派用）。按语言 × 模态组织。
+const PROTOCOL_OPTIONS = {
+  zh: {
+    image: [
+      { value: 'openai-images', label: 'OpenAI 兼容' },
+      { value: 'gemini-generate-content', label: 'Google Gemini' },
+      { value: 'dashscope-async', label: '阿里 DashScope（异步）' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'stability', label: 'Stability' },
+      { value: 'tencent-hunyuan-async', label: '腾讯混元（异步）' },
+      { value: 'midjourney', label: 'Midjourney' },
+    ],
+    video: [
+      { value: 'volcengine-async', label: '火山方舟（异步）' },
+      { value: 'kling-async', label: '可灵（异步）' },
+      { value: 'zhipu-async', label: '智谱（异步）' },
+      { value: 'dashscope-async', label: '阿里 DashScope（异步）' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'tencent-hunyuan-async', label: '腾讯混元（异步）' },
+      { value: 'google-interactions', label: 'Google Interactions' },
+    ],
+    audio: [
+      { value: 'volcengine-tts', label: '火山语音 TTS' },
+      { value: 'volcengine-plan-tts', label: '火山 Agent Plan TTS' },
+      { value: 'zhipu-async', label: '智谱' },
+      { value: 'dashscope-sync', label: '阿里 DashScope（同步）' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'minimax-tts-async', label: 'MiniMax TTS（异步）' },
+      { value: 'minimax-voice-clone', label: 'MiniMax 声音克隆' },
+    ],
+  },
+  en: {
+    image: [
+      { value: 'openai-images', label: 'OpenAI-compatible' },
+      { value: 'gemini-generate-content', label: 'Google Gemini' },
+      { value: 'dashscope-async', label: 'Alibaba DashScope (async)' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'stability', label: 'Stability' },
+      { value: 'tencent-hunyuan-async', label: 'Tencent Hunyuan (async)' },
+      { value: 'midjourney', label: 'Midjourney' },
+    ],
+    video: [
+      { value: 'volcengine-async', label: 'Volcengine Ark (async)' },
+      { value: 'kling-async', label: 'Kling (async)' },
+      { value: 'zhipu-async', label: 'Zhipu (async)' },
+      { value: 'dashscope-async', label: 'Alibaba DashScope (async)' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'tencent-hunyuan-async', label: 'Tencent Hunyuan (async)' },
+      { value: 'google-interactions', label: 'Google Interactions' },
+    ],
+    audio: [
+      { value: 'volcengine-tts', label: 'Volcengine TTS' },
+      { value: 'volcengine-plan-tts', label: 'Volcengine Agent Plan TTS' },
+      { value: 'zhipu-async', label: 'Zhipu' },
+      { value: 'dashscope-sync', label: 'Alibaba DashScope (sync)' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'minimax-tts-async', label: 'MiniMax TTS (async)' },
+      { value: 'minimax-voice-clone', label: 'MiniMax Voice Clone' },
+    ],
+  },
+};
+
 /**
  * 自建命令菜单下拉组件（替代原生 <select>，统一控制台美学）。
  *
@@ -884,12 +1035,18 @@ function prismApp() {
         phSelectModel: '请选择模型',
         customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
+        showKey: '显示密钥', hideKey: '隐藏密钥',
+        labelEndpoint: '请求地址',
+        phNoEndpoint: '选择模型后显示',
+        labelProtocol: '接口协议',
+        phSelectProtocol: '选择接口协议',
+        phCustomBaseUrl: '完整 base url（如 https://api.example.com/v1）',
         labelGcpJson: 'Google Cloud JSON 凭证',
         btnSelectGcpJson: '选择 JSON 凭证文件',
         btnSelectGcpJsonChange: '重新选择 JSON 凭证文件',
         gcpJsonHelp: '选择后系统会读取 JSON 内容作为 API 凭证进行保存。',
         phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
-        labelModelProto: '模型 / 协议 / BaseURL',
+        labelModelProto: '模型 ID',
         phModel: '模型 ID', phProtocol: '协议（如 openai-images）', phBaseUrl: 'base url（可选）',
         labelOutputDir: '主输出目录',
         phOutputDir: '留空 = ~/.prismstudio/generated-media',
@@ -926,12 +1083,18 @@ function prismApp() {
         phSelectModel: 'Select a model',
         customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
+        showKey: 'Show key', hideKey: 'Hide key',
+        labelEndpoint: 'Endpoint',
+        phNoEndpoint: 'shown after selecting a model',
+        labelProtocol: 'Protocol',
+        phSelectProtocol: 'Select protocol',
+        phCustomBaseUrl: 'full base url (e.g. https://api.example.com/v1)',
         labelGcpJson: 'Google Cloud JSON',
         btnSelectGcpJson: 'Select JSON File',
         btnSelectGcpJsonChange: 'Change JSON File',
         gcpJsonHelp: 'After selection, the system reads the JSON content to save as API credentials.',
         phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
-        labelModelProto: 'Model / Protocol / BaseURL',
+        labelModelProto: 'Model ID',
         phModel: 'model-id', phProtocol: 'protocol (e.g. openai-images)', phBaseUrl: 'base url (optional)',
         labelOutputDir: 'Master Output Directory',
         phOutputDir: 'blank = ~/.prismstudio/generated-media',
@@ -1017,6 +1180,16 @@ function prismApp() {
         ]}],
       }
     },
+    // custom 模式协议下拉配置：按模态过滤，显示人类可读名，值写内部 protocol。
+    protocolDropdownConfig(key) {
+      const self = this
+      return {
+        placeholder: self.t.phSelectProtocol,
+        getValue: () => self.config[key]?.protocol || '',
+        getGroups: () => [{ items: (PROTOCOL_OPTIONS[self.lang] && PROTOCOL_OPTIONS[self.lang][key]) || [] }],
+      }
+    },
+    onProtocolSelect(key, e) { this.config[key].protocol = e.detail.value; },
     // dropdown 选中事件 → 写回 config
     onModelSelect(key, e) {
       this.config[key].presetId = e.detail.value
@@ -1065,6 +1238,9 @@ function prismApp() {
       return this.lang === 'zh' ? '已选择 JSON 文件' : 'Selected JSON file'
     },
     config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
+    // 各模态 API Key 是否明文显示（内存态，不存 config.json）
+    showKey: { image:false, video:false, audio:false },
+    showTempKey: false,
     // 各模态切换前的 presetId（内存态，不存 config.json，供 onPresetChange 判断新旧）
     _lastPreset: { image:'', video:'', audio:'' },
     presets: { image: [], video: [], audio: [] },
@@ -1345,8 +1521,36 @@ function prismApp() {
       return byPreset;
     },
     presetHelp(key) {
+      // BaseURL 已有独立可编辑输入框展示，这里不再显示技术细节，返回空隐藏整行。
+      return '';
+    },
+    // 当前 preset 的默认 BaseURL（custom 无默认值）
+    presetBaseUrl(key) {
       const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);
-      return p ? (p.vendor + ' / ' + p.protocol + (p.helpUrl ? ' / ' + p.helpUrl : '')) : '';
+      return p?.baseUrl || '';
+    },
+    // 返回完整请求地址：baseUrl（用户值优先，否则 preset 默认）+ 协议×模态对应的主提交路径后缀。
+    // 动态路径协议（无固定后缀）退化为只显示 baseUrl。
+    displayEndpoint(key) {
+      const mod = this.config[key];
+      const base = (mod?.baseUrl?.trim() || this.presetBaseUrl(key) || '').replace(/\\/$/, '');
+      const proto = mod?.protocol || this.presetProtocol(key) || '';
+      const byModality = PROTOCOL_ENDPOINT_PATH[proto] || {};
+      const suffix = byModality[key] || '';
+      return base ? (base + suffix) : '';
+    },
+    // 当前 preset 的默认协议（custom 从 config 读）
+    presetProtocol(key) {
+      const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);
+      return p?.protocol || this.config[key]?.protocol || '';
+    },
+    // 返回当前协议的人类可读名（供展示，custom 下拉选项反查）
+    protocolDisplayLabel(key) {
+      const proto = this.presetProtocol(key);
+      if (!proto) return '';
+      const opts = (PROTOCOL_OPTIONS[this.lang] && PROTOCOL_OPTIONS[this.lang][key]) || [];
+      const found = opts.find(o => o.value === proto);
+      return found ? found.label : proto;
     },
     isReady(modality) { return this.status.modalities && this.status.modalities[modality]; },
     async runTest() {

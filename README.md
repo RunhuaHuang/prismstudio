@@ -66,7 +66,7 @@ Prismstudio 是一个遵循 [Model Context Protocol](https://modelcontextprotoco
 ### 还有这些
 
 - **多模态全覆盖**：文生图、图生图/编辑、文生视频、图生视频、TTS 语音合成、音乐生成、声音克隆
-- **内嵌 WebUI**：配置台、试用台、接入向导三合一，零配置门槛，不用手写 JSON
+- **内嵌 WebUI**：配置台、试用台、接入向导三合一，零配置门槛，不用手写 JSON；API Key 眼睛切换、完整请求地址与接口协议一目了然
 - **动态工具暴露**：只有配置好的模态才会暴露给 agent，不产生空壳工具
 - **本地优先**：凭证明文存在本地 `~/.prismstudio/config.json`，WebUI 仅绑定 `127.0.0.1`，不上传任何数据
 
@@ -83,7 +83,7 @@ Prismstudio 把「模态 × 厂商」封装成 14 种协议族，引擎内核按
 | OpenAI | gpt-image-1 / 2 | 文生图、参考图编辑、透明背景 |
 | Google Gemini | flash / flash-lite / pro（nano-banana） | 文生图、多轮编辑、宽高比与分辨率 |
 | Google Vertex | flash / flash-lite / pro | Gemini 同款，走 Vertex AI 配额 |
-| 豆包 | Seedream（含 4 / 4.5 / 5 / 5-Lite） | 高质量国产图像 |
+| 豆包 | Seedream（含 4 / 4.5 / 5 / 5-Lite） | 高质量国产图像；另有 Agent Plan 接入（独立鉴权） |
 | 智谱 | GLM-Image、CogView-4 | 国产开源生态 |
 | MiniMax | image-01 | 单图生成 |
 | 通义万相 | Qwen-Image、Plus / Max / 2-Pro | 阿里云图像 |
@@ -97,7 +97,7 @@ Prismstudio 把「模态 × 厂商」封装成 14 种协议族，引擎内核按
 | 厂商 | 模型 | 能力 |
 |---|---|---|
 | 智谱 | CogVideoX 2 / 3 / Flash | 国产开源视频 |
-| 豆包 | Seedance（含 1.5-pro / 2 / 2-fast / 2-mini） | 字节视频 |
+| 豆包 | Seedance（含 1.5-pro / 2 / 2-fast / 2-mini） | 字节视频；另有 Agent Plan 接入（独立鉴权） |
 | 可灵 | Kling v2 | 高质量国产视频 |
 | MiniMax | video-01 | 视频生成 |
 | 万相 | wan2.7-t2v、wan2.7-videoedit | 文生视频、视频编辑 |
@@ -336,6 +336,8 @@ prismstudio --help                # 显示帮助
 ```
 
 > **同厂商 Key 记忆**：每个模态按厂商（vendor）单独记忆 API Key（存在 `apiKeyByVendor`，并兼容旧的 `apiKeyByPreset`）。同一模态内切换同厂商模型无需重填；图片 / 视频 / 音频三类工具之间不强制共用。
+>
+> **火山引擎接入分组**：因鉴权方式不同，火山引擎在配置台里拆成三个独立 vendor：**火山 API**（普通方舟 Ark key）、**火山 Agent Plan**（Agent Plan 独立 key）、**火山语音**（语音服务独立 key）。三组各自记忆 Key，互不覆盖。
 
 > **安全说明**：凭证以明文存储（与 MCP 生态惯例一致）。WebUI 仅绑定 `127.0.0.1`，不加载第三方 CDN 脚本/字体，并通过安全响应头、Origin / Sec-Fetch-Site 校验与 JSON Content-Type 校验降低本机跨站请求风险。生产环境请自行做好文件权限管控。详见 [SECURITY.md](SECURITY.md)。
 
