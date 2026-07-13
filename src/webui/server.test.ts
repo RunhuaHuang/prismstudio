@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { isLoopbackAuthority, mergeConfigPreservingMaskedKeys, validateLocalApiRequest } from './server'
+import { isLoopbackAuthority, mergeConfigPreservingMaskedKeys, resolveGeneratedMediaDir, resolveTestCredentials, validateLocalApiRequest } from './server'
+
+describe('webui server · output path', () => {
+  test('always treats configured outputDir as a root, including roots named generated-media', () => {
+    expect(resolveGeneratedMediaDir('/tmp/output')).toBe('/tmp/output/generated-media')
+    expect(resolveGeneratedMediaDir('/tmp/generated-media')).toBe('/tmp/generated-media/generated-media')
+  })
+})
 
 describe('webui server · local API guard', () => {
   test('accepts same-origin loopback JSON writes', () => {
@@ -152,5 +159,47 @@ describe('webui server · API key merge', () => {
 
     expect(merged.image?.apiKey).toBe('legacy-preset-key')
     expect(merged.image?.apiKeyByPreset?.['gemini-pro-image']).toBe('legacy-preset-key')
+  })
+})
+
+describe('webui server · playground credentials', () => {
+  test('uses current page preset/protocol/baseUrl and the target vendor key before autosave completes', () => {
+    const credentials = resolveTestCredentials({
+      modality: 'image',
+      prompt: 'cat',
+      presetId: 'gemini-pro-image',
+      model: 'gemini-3-pro-image-preview',
+      protocol: 'gemini-generate-content',
+      baseUrl: 'https://proxy.example.com',
+    }, {
+      image: {
+        enabled: true,
+        presetId: 'doubao-seedream-5',
+        model: 'doubao-seedream-5-0-260128',
+        protocol: 'openai-images',
+        baseUrl: 'https://old.example.com',
+        apiKey: 'old-doubao-key',
+        apiKeyByVendor: { 'Google Gemini': 'stored-google-key', '豆包': 'old-doubao-key' },
+      },
+    })
+
+    expect(credentials.apiKey).toBe('stored-google-key')
+    expect(credentials.presetId).toBe('gemini-pro-image')
+    expect(credentials.model).toBe('gemini-3-pro-image-preview')
+    expect(credentials.protocol).toBe('gemini-generate-content')
+    expect(credentials.baseUrl).toBe('https://proxy.example.com')
+  })
+
+  test('never reuses the old preset top-level key for a different vendor', () => {
+    expect(() => resolveTestCredentials({
+      modality: 'image', prompt: 'cat', presetId: 'gemini-pro-image',
+      model: 'gemini-3-pro-image-preview', protocol: 'gemini-generate-content', baseUrl: '',
+    }, {
+      image: {
+        enabled: true,
+        presetId: 'doubao-seedream-5',
+        apiKey: 'old-doubao-key',
+      },
+    })).toThrow(/当前模型的 API Key/)
   })
 })

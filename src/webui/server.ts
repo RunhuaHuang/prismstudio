@@ -29,6 +29,7 @@ import {
   isModalityReady,
   toEngineCredentials,
   type DuoConfig,
+  type MediaProtocol,
   type ModalityConfig,
 } from '../config.js'
 import {
@@ -60,19 +61,25 @@ const HTML_CSP = [
   "frame-ancestors 'none'",
 ].join('; ')
 
-interface TestRequestBody {
+export interface TestRequestBody {
   modality: MediaModality
   prompt: string
   /** 临时覆盖的 apiKey（不修改 config.json，仅本次试用） */
   apiKey?: string
   /** 临时覆盖的 presetId（不修改 config.json） */
   presetId?: string
+  /** 当前页面中的模型/协议/Base URL，避免自动保存 debounce 期间试用旧配置 */
+  model?: string
+  protocol?: MediaProtocol | ''
+  baseUrl?: string
   size?: string
   numberOfImages?: number
   duration?: number
   voice?: string
   task?: 'tts' | 'music' | 'clone'
   referencePaths?: string[]
+  /** 试用产物落盘根目录（留空走默认 playground） */
+  outputDir?: string
 }
 
 /** 读取请求体（JSON） */
@@ -163,6 +170,11 @@ export function isLoopbackAuthority(authority: string | undefined): boolean {
   if (!authority) return false
   const host = stripPort(authority)
   return host === '127.0.0.1' || host === 'localhost'
+}
+
+/** 根据配置中的输出根目录计算 MCP 生成物的实际落盘目录。 */
+export function resolveGeneratedMediaDir(root: string): string {
+  return resolve(root, 'generated-media')
 }
 
 /**
@@ -302,7 +314,7 @@ async function handleApi(
     const root = config.outputDir || getDefaultOutputDir()
     sendJson(res, 200, {
       configPath: getConfigPath(),
-      outputDir: root + (root.endsWith('generated-media') ? '' : '/generated-media'),
+      outputDir: resolveGeneratedMediaDir(root),
       modalities: {
         image: isModalityReady(config, 'image'),
         video: isModalityReady(config, 'video'),
@@ -422,28 +434,7 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
   }
 
   const config = loadConfig()
-  const stored = getModalityConfig(config, modality)
-
-  // 解析凭据：优先用 body 临时传入的，否则用 config 里存的
-  let credentials: Record<string, string>
-  if (body.apiKey?.trim()) {
-    // 试用台临时 key：用 body 的 presetId 或 config 的 presetId
-    const presetId = body.presetId || stored?.presetId || 'custom'
-    credentials = toEngineCredentials({
-      enabled: true,
-      apiKey: body.apiKey,
-      presetId,
-      model: stored?.model,
-      baseUrl: stored?.baseUrl,
-      protocol: stored?.protocol,
-      audioTask: stored?.audioTask,
-    })
-  } else {
-    if (!stored?.apiKey?.trim()) {
-      throw new Error(`未配置 ${modality} 模态的 API Key，请先在配置页填写或在此处临时输入`)
-    }
-    credentials = toEngineCredentials(stored)
-  }
+  const credentials = resolveTestCredentials(body, config)
 
   const effective = resolveEffectiveMediaCredentials(credentials, modality)
   const resolved = resolveMediaConfig(effective, modality)
@@ -453,8 +444,10 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
   const prompt = body.prompt?.trim()
   if (!prompt) throw new Error('prompt 不能为空')
 
-  // 试用产物落到 ~/.prismstudio/playground/
-  const playgroundDir = resolve(getConfigDir(), 'playground')
+  // 试用产物落盘目录：用户在试用台指定的优先，否则落到默认 ~/.prismstudio/playground/
+  const playgroundDir = body.outputDir?.trim()
+    ? resolve(body.outputDir.trim())
+    : resolve(getConfigDir(), 'playground')
   mkdirSync(playgroundDir, { recursive: true })
 
   const { images: generated } = await generateMedia({
@@ -494,6 +487,42 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
     text: textBlock?.text ?? '',
     savedDir: savedPaths[0] ? resolve(playgroundDir, modality) : '',
   }
+}
+
+/**
+ * 用页面当前状态解析试用凭据。页面状态优先于磁盘配置；若用户刚切换预设且
+ * 尚未自动保存，则按目标预设 vendor/preset 从磁盘的真实 key 记忆中取值，
+ * 绝不把旧预设顶层 key 错配给新厂商。
+ */
+export function resolveTestCredentials(body: TestRequestBody, config: DuoConfig): Record<string, string> {
+  const modality = body.modality
+  const stored = getModalityConfig(config, modality)
+  const presetId = body.presetId?.trim() || stored?.presetId?.trim() || 'custom'
+  const samePreset = stored?.presetId === presetId
+  const vendorKey = vendorKeyForPreset(modality, presetId)
+  const storedForTarget = stored
+    ? (stored.apiKeyByVendor?.[vendorKey]?.trim()
+      || stored.apiKeyByPreset?.[presetId]?.trim()
+      || (samePreset ? stored.apiKey?.trim() : ''))
+    : ''
+  const apiKey = body.apiKey?.trim() || storedForTarget
+  if (!apiKey) {
+    throw new Error(`未配置 ${modality} 模态当前模型的 API Key，请先在配置页填写或在此处临时输入`)
+  }
+
+  const pageValue = (value: unknown, fallback: string | undefined): string | undefined => (
+    typeof value === 'string' ? value : fallback
+  )
+  const protocolValue = pageValue(body.protocol, samePreset ? stored?.protocol : undefined)?.trim()
+  return toEngineCredentials({
+    enabled: true,
+    apiKey,
+    presetId,
+    model: pageValue(body.model, samePreset ? stored?.model : undefined),
+    baseUrl: pageValue(body.baseUrl, samePreset ? stored?.baseUrl : undefined),
+    protocol: protocolValue ? protocolValue as MediaProtocol : undefined,
+    audioTask: stored?.audioTask,
+  })
 }
 
 // ===== 接入向导：导出 agent 配置 =====

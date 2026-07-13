@@ -339,18 +339,18 @@ textarea{resize:vertical;line-height:1.6}
 .ch-field{margin-bottom:var(--space-md)}
 .ch-field:last-child{margin-bottom:0}
 .ch-field .label{display:block;margin-bottom:var(--space-xs)}
+.label-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-sm);margin-bottom:var(--space-xs)}
+.reset-btn{
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);font-weight:500;
+  letter-spacing:.04em;color:var(--text-muted);background:none;border:none;
+  cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px;transition:color .15s;
+}
+.reset-btn:hover{color:var(--signal)}
 .ch-help{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);
   margin-top:var(--space-xs);line-height:1.5;word-break:break-all}
-.endpoint-display{
-  width:100%;background:var(--surface-2);border:1px solid var(--line);color:var(--text-secondary);
-  padding:var(--space-sm) var(--space-md);border-radius:var(--radius);
-  font-family:var(--font-mono);font-size:var(--fs-mono-xs);line-height:1.5;
-  word-break:break-all;resize:none;cursor:default;
-}
-.proto-readonly{
-  font-family:var(--font-mono);font-size:var(--fs-mono-sm);color:var(--text-secondary);
-  padding:var(--space-sm) var(--space-md);background:var(--surface-2);
-  border:1px solid var(--line);border-radius:var(--radius);
+.endpoint-preview{
+  font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--signal-dim);
+  margin-top:var(--space-xs);line-height:1.5;word-break:break-all;
 }
 
 /* 开关：拨杆式 */
@@ -653,41 +653,44 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
             </template>
           </div>
 
-          <!-- 完整请求地址（只读展示，引擎最终请求打到的地址） -->
+          <!-- Base URL：可编辑（所有模式统一）。预设带默认值作 placeholder，custom / Midjourney 由用户填写；下方实时展示拼接后的完整请求地址 -->
           <div class="ch-field">
-            <span class="label" x-text="t.labelEndpoint"></span>
-            <textarea readonly rows="2" class="endpoint-display"
-              x-text="displayEndpoint(m.key)"
-              :placeholder="t.phNoEndpoint"></textarea>
+            <div class="label-row">
+              <span class="label" x-text="t.labelBaseUrl"></span>
+              <button type="button" class="reset-btn" x-show="config[m.key].presetId !== 'custom' && presetBaseUrl(m.key) && !!config[m.key].baseUrl?.trim()"
+                @click="config[m.key].baseUrl = ''" x-text="t.btnResetDefault" :title="t.btnResetDefault"></button>
+            </div>
+            <input type="text" x-model="config[m.key].baseUrl"
+              :placeholder="presetBaseUrl(m.key) || t.phCustomBaseUrl" />
+            <div class="endpoint-preview" x-show="displayEndpoint(m.key)" x-text="'→ ' + displayEndpoint(m.key)"></div>
           </div>
 
-          <!-- 协议（只读展示，custom 模式见下方可编辑下拉） -->
-          <div class="ch-field" x-show="config[m.key].presetId !== 'custom' && protocolDisplayLabel(m.key)">
+          <!-- 接口协议：可读下拉（所有模式统一） -->
+          <div class="ch-field">
             <span class="label" x-text="t.labelProtocol"></span>
-            <div class="proto-readonly" x-text="protocolDisplayLabel(m.key)"></div>
+            <div class="cmd-select" x-data="dropdown(protocolDropdownConfig(m.key))"
+                 @select="onProtocolSelect(m.key, $event)">
+              <button type="button" class="cmd-trigger" @click="toggle" @keydown="onKeydown"
+                      :aria-expanded="open">
+                <span class="cmd-val" :class="isPlaceholder && 'placeholder'" x-text="triggerLabel"></span>
+                <span class="cmd-chev">▾</span>
+              </button>
+              <div class="cmd-menu" x-show="open" @click.away="close">
+                <template x-for="item in groups[0].items" :key="item.value">
+                  <div class="cmd-item" :class="{ selected: selectedVal===item.value, 'kb-active': isKbActive(item) }"
+                       @click="pick(item)" @mouseenter="kbIndex = _flat.findIndex(x => x.value === item.value)">
+                    <span class="cmd-item-main" x-text="item.label"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
           </div>
 
+          <!-- 模型 ID：仅 custom 模式需要（预设自带 model） -->
           <template x-if="config[m.key].presetId === 'custom'">
             <div class="ch-field">
-              <span class="label" x-text="t.labelModelProto"></span>
-              <input type="text" x-model="config[m.key].model" :placeholder="t.phModel" style="margin-bottom:6px" />
-              <input type="text" x-model="config[m.key].baseUrl" :placeholder="t.phCustomBaseUrl" style="margin-bottom:6px" />
-              <div class="cmd-select" x-data="dropdown(protocolDropdownConfig(m.key))"
-                   @select="onProtocolSelect(m.key, $event)">
-                <button type="button" class="cmd-trigger" @click="toggle" @keydown="onKeydown"
-                        :aria-expanded="open">
-                  <span class="cmd-val" :class="isPlaceholder && 'placeholder'" x-text="triggerLabel"></span>
-                  <span class="cmd-chev">▾</span>
-                </button>
-                <div class="cmd-menu" x-show="open" @click.away="close">
-                  <template x-for="item in groups[0].items" :key="item.value">
-                    <div class="cmd-item" :class="{ selected: selectedVal===item.value, 'kb-active': isKbActive(item) }"
-                         @click="pick(item)" @mouseenter="kbIndex = _flat.findIndex(x => x.value === item.value)">
-                      <span class="cmd-item-main" x-text="item.label"></span>
-                    </div>
-                  </template>
-                </div>
-              </div>
+              <span class="label" x-text="t.labelModel"></span>
+              <input type="text" x-model="config[m.key].model" :placeholder="t.phModel" />
             </div>
           </template>
         </div>
@@ -783,6 +786,11 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
               <svg x-show="!showTempKey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 5.39-1.61"/><path d="M2 2l20 20"/></svg>
             </button>
           </div>
+        </div>
+
+        <div style="margin-top:var(--space-lg)">
+          <span class="label" x-text="t.labelPlaygroundDir"></span>
+          <input type="text" x-model="test.outputDir" :placeholder="t.phPlaygroundDir" />
         </div>
 
         <button class="btn btn-primary" style="margin-top:var(--space-lg);width:100%;justify-content:center"
@@ -1036,18 +1044,18 @@ function prismApp() {
         customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
         showKey: '显示密钥', hideKey: '隐藏密钥',
-        labelEndpoint: '请求地址',
-        phNoEndpoint: '选择模型后显示',
+        labelBaseUrl: 'Base URL',
+        btnResetDefault: '恢复默认',
         labelProtocol: '接口协议',
         phSelectProtocol: '选择接口协议',
         phCustomBaseUrl: '完整 base url（如 https://api.example.com/v1）',
+        labelModel: '模型 ID',
         labelGcpJson: 'Google Cloud JSON 凭证',
         btnSelectGcpJson: '选择 JSON 凭证文件',
         btnSelectGcpJsonChange: '重新选择 JSON 凭证文件',
         gcpJsonHelp: '选择后系统会读取 JSON 内容作为 API 凭证进行保存。',
         phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
-        labelModelProto: '模型 ID',
-        phModel: '模型 ID', phProtocol: '协议（如 openai-images）', phBaseUrl: 'base url（可选）',
+        phModel: '模型 ID',
         labelOutputDir: '主输出目录',
         phOutputDir: '留空 = ~/.prismstudio/generated-media',
         btnCommit: '▸ 提交配置', btnCommitting: '提交中…',
@@ -1063,6 +1071,7 @@ function prismApp() {
         labelVoice: '音色', phVoice: '如 Cherry',
         warnNotLive: '⚠ 通道未就绪 — 该模态尚未保存密钥。请到「通道」配置，或在下方临时填入密钥进行一次性测试。',
         labelTempKey: '临时密钥', tempKeyHint: '（一次性，不保存）', phTempKey: '留空 = 使用已保存密钥',
+        labelPlaygroundDir: '试用输出目录', phPlaygroundDir: '留空 = ~/.prismstudio/playground',
         btnGenerate: '▸ 生成', btnGenerating: '生成中… 视频可能需要 1–5 分钟',
         generationFailed: '生成失败',
         signalOutput: '信号输出', awaitingInput: '等待输入',
@@ -1084,18 +1093,18 @@ function prismApp() {
         customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
         showKey: 'Show key', hideKey: 'Hide key',
-        labelEndpoint: 'Endpoint',
-        phNoEndpoint: 'shown after selecting a model',
+        labelBaseUrl: 'Base URL',
+        btnResetDefault: 'Reset',
         labelProtocol: 'Protocol',
         phSelectProtocol: 'Select protocol',
         phCustomBaseUrl: 'full base url (e.g. https://api.example.com/v1)',
+        labelModel: 'Model ID',
         labelGcpJson: 'Google Cloud JSON',
         btnSelectGcpJson: 'Select JSON File',
         btnSelectGcpJsonChange: 'Change JSON File',
         gcpJsonHelp: 'After selection, the system reads the JSON content to save as API credentials.',
         phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
-        labelModelProto: 'Model ID',
-        phModel: 'model-id', phProtocol: 'protocol (e.g. openai-images)', phBaseUrl: 'base url (optional)',
+        phModel: 'model-id',
         labelOutputDir: 'Master Output Directory',
         phOutputDir: 'blank = ~/.prismstudio/generated-media',
         btnCommit: '▸ Commit Config', btnCommitting: 'committing…',
@@ -1111,6 +1120,7 @@ function prismApp() {
         labelVoice: 'Voice', phVoice: 'e.g. Cherry',
         warnNotLive: '⚠ CHANNEL NOT LIVE — this modality has no stored key. Set it in Channels, or paste a key below for one-shot testing.',
         labelTempKey: 'Temp Key', tempKeyHint: '(one-shot, not stored)', phTempKey: 'blank = use stored key',
+        labelPlaygroundDir: 'Playground Output', phPlaygroundDir: 'blank = ~/.prismstudio/playground',
         btnGenerate: '▸ Generate', btnGenerating: 'rendering… video may take 1–5 min',
         generationFailed: 'generation failed',
         signalOutput: 'SIGNAL OUTPUT', awaitingInput: 'awaiting input',
@@ -1251,7 +1261,7 @@ function prismApp() {
     presetsError: '', statusError: '', exportError: '',
     retryingLoad: false, retryingAux: false,
 
-    test: { modality: 'image', prompt: '', size: '', numberOfImages: 1, duration: 5, task: 'tts', voice: '', tempKey: '' },
+    test: { modality: 'image', prompt: '', size: '', numberOfImages: 1, duration: 5, task: 'tts', voice: '', tempKey: '', outputDir: '' },
     testing: false, testResult: null, testError: '',
 
     exportAgent: 'claude', exportData: null, exportText: '', copied: false,
@@ -1558,7 +1568,8 @@ function prismApp() {
       try {
         // 试用台用当前下拉选中的 presetId（含未保存的改动），让"改下拉→直接试"生效
         const m = this.test.modality;
-        const body = { modality: m, prompt: this.test.prompt, apiKey: this.test.tempKey || undefined, presetId: this.config[m]?.presetId || undefined, size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined };
+        const visibleKey = this.config[m]?.apiKey;
+        const body = { modality: m, prompt: this.test.prompt, apiKey: this.test.tempKey || (visibleKey && !visibleKey.includes('****') ? visibleKey : undefined), presetId: this.config[m]?.presetId || undefined, model: this.config[m]?.model ?? '', protocol: this.config[m]?.protocol ?? '', baseUrl: this.config[m]?.baseUrl ?? '', size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined, outputDir: this.test.outputDir || undefined };
         const r = await fetch('/api/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || this.t.generationFailed);

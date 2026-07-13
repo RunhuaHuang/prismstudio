@@ -677,7 +677,7 @@ export function resolveMediaConfig(
       preset: matched,
       presetId: matched.id,
       modality: matched.modality,
-      protocol: matched.protocol,
+      protocol: (credentials.protocol?.trim() as MediaProtocol) || matched.protocol,
       baseUrl: credentials.baseUrl?.trim() || matched.baseUrl,
       model: matched.model,
       editModel: matched.editModel,
@@ -1014,7 +1014,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-function createInternalTimeoutSignal(timeoutMs: number): {
+function createInternalTimeoutSignal(timeoutMs: number, parentSignal?: AbortSignal): {
   signal: AbortSignal
   clear: () => void
   timedOut: () => boolean
@@ -1025,11 +1025,17 @@ function createInternalTimeoutSignal(timeoutMs: number): {
     didTimeout = true
     controller.abort()
   }, timeoutMs)
+  const onParentAbort = (): void => controller.abort(parentSignal?.reason)
+  if (parentSignal?.aborted) onParentAbort()
+  else parentSignal?.addEventListener('abort', onParentAbort, { once: true })
   const maybeUnref = (timer as { unref?: () => void }).unref
   if (typeof maybeUnref === 'function') maybeUnref.call(timer)
   return {
     signal: controller.signal,
-    clear: () => clearTimeout(timer),
+    clear: () => {
+      clearTimeout(timer)
+      parentSignal?.removeEventListener('abort', onParentAbort)
+    },
     timedOut: () => didTimeout,
   }
 }
@@ -1214,7 +1220,10 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
   const modelPreset = input.config.preset
 
   const configuredTask = modelPreset?.audioTask ?? input.config.audioTask
-  let protocol = modelPreset?.protocol ?? input.config.protocol
+  // resolveMediaConfig 已经把“用户显式覆盖 > 预设默认值”的优先级折叠进
+  // config.protocol。这里若再次从 preset 取值，会让解析结果看似正确、实际分派
+  // 却悄悄回到预设协议，导致自定义代理/兼容协议完全不生效。
+  let protocol = input.config.protocol
   // Agent 侧无实时诉求，统一让所有 MiniMax TTS 走异步长文本接口（t2a_async_v2）
   if (protocol === 'minimax' && configuredTask === 'tts') {
     protocol = 'minimax-tts-async'
@@ -3283,11 +3292,9 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
   const { baseUrl, model } = input.config
   if (!baseUrl) throw new Error('minimax 缺少 baseUrl')
 
-  // 音乐生成使用独立的内部超时 signal，不复用调用方的 signal：
-  // 音乐生成通常需要 30-120s，调用方若为短请求设置了短超时 signal 并已 abort，
-  // 直接复用会导致音乐生成被错误打断。音乐生成有自己的 MUSIC_SYNC_TIMEOUT_MS 保护。
-  // 调用方主动取消的语义目前由 MCP 协议层（cancellation notification）处理，不经过此 signal。
-  const timeout = createInternalTimeoutSignal(MUSIC_SYNC_TIMEOUT_MS)
+  // 内部超时与调用方取消合并：长任务不能沿用过短的定时器策略，但用户明确
+  // 取消 MCP 请求时仍必须立即停止后续网络请求和可能产生费用的生成任务。
+  const timeout = createInternalTimeoutSignal(MUSIC_SYNC_TIMEOUT_MS, input.signal)
   const musicSignal = timeout.signal
   try {
     let coverFeatureId = input.coverFeatureId
@@ -3360,7 +3367,7 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
     const audioUrl = responseBody.data?.audio_url ?? (/^https?:\/\//.test(String(audio ?? '')) ? String(audio) : undefined)
     if (audioUrl) {
       timeout.clear()
-      const downloadTimeout = createInternalTimeoutSignal(MUSIC_DOWNLOAD_TIMEOUT_MS)
+      const downloadTimeout = createInternalTimeoutSignal(MUSIC_DOWNLOAD_TIMEOUT_MS, input.signal)
       try {
         return { images: [await downloadAsBase64(audioUrl, fetchFn, downloadTimeout.signal, audioMimeForFormat(audioFormat))] }
       } catch (err) {

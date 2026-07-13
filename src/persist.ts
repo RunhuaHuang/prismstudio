@@ -142,16 +142,17 @@ export function persistGenerated(
     const item = generated[i]!
     const ext = extForMediaType(item.mediaType)
     const suffix = generated.length > 1 ? `-${i + 1}` : ''
-    const filename = sanitizedCustom
+    const requestedFilename = sanitizedCustom
       ? `${sanitizedCustom}${suffix}${ext}`
       : `${prefixForMediaType(item.mediaType)}-${randomUUID().slice(0, 8)}${ext}`
 
+    let filename = requestedFilename
     let localPath: string | undefined
     try {
-      const fullPath = resolve(options.outputDir, filename)
-      writeFileSync(fullPath, Buffer.from(item.data, 'base64'))
-      localPath = fullPath
-      savedPaths.push(fullPath)
+      const written = writeGeneratedFileExclusively(options.outputDir, requestedFilename, item.data)
+      filename = written.filename
+      localPath = written.fullPath
+      savedPaths.push(written.fullPath)
     } catch (err) {
       console.warn(`[prismstudio] 写入文件失败 (${filename})：`, err)
     }
@@ -179,6 +180,35 @@ export function persistGenerated(
   content.push({ type: 'text', text: summary })
 
   return { items, content, savedPaths }
+}
+
+/**
+ * 原子地写入生成物且绝不覆盖已有路径（包括符号链接）。语义化文件名重复时
+ * 自动追加 -2/-3…；`wx` 同时消除“先检查再写入”的并发竞态。
+ */
+function writeGeneratedFileExclusively(
+  outputDir: string,
+  requestedFilename: string,
+  base64Data: string,
+): { filename: string; fullPath: string } {
+  const dot = requestedFilename.lastIndexOf('.')
+  const stem = dot > 0 ? requestedFilename.slice(0, dot) : requestedFilename
+  const ext = dot > 0 ? requestedFilename.slice(dot) : ''
+  const data = Buffer.from(base64Data, 'base64')
+
+  for (let attempt = 1; attempt <= 10_000; attempt++) {
+    const filename = attempt === 1 ? requestedFilename : `${stem}-${attempt}${ext}`
+    const fullPath = resolve(outputDir, filename)
+    try {
+      writeFileSync(fullPath, data, { flag: 'wx' })
+      return { filename, fullPath }
+    } catch (err) {
+      if (isAlreadyExistsError(err)) continue
+      throw err
+    }
+  }
+
+  throw new Error(`无法为生成物分配不冲突的文件名: ${requestedFilename}`)
 }
 
 function isAlreadyExistsError(err: unknown): boolean {

@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-07-13
+
+### Added
+- WebUI 的预设模型也可覆盖 Base URL 与接口协议，并实时预览最终请求地址；支持一键恢复预设 Base URL。
+- 试用台支持单独指定生成物输出目录。
+
+### Fixed
+- 修复预设协议覆盖只在配置解析层生效、实际生成仍被预设协议强制覆盖的问题。
+- 修复模型切换后在自动保存完成前立即试用时，可能错用旧模型、旧协议、旧 Base URL 或旧厂商 API Key 的竞态。
+- MCP 请求取消信号贯通到全部生成网络请求与轮询，MiniMax 音乐也会在用户取消后立即停止。
+- 修复 WebUI 状态栏在输出根目录名为 `generated-media` 时显示的路径与实际落盘路径不一致。
+- 修复 Base URL 没有覆盖值时仍显示「恢复默认」按钮。
+
+### Security
+- 明文 API Key 配置文件在 macOS / Linux 上强制使用 `0600` 权限，并自动收紧旧文件的宽松权限。
+- 生成物改为原子排他写入，重名自动追加序号，避免覆盖已有文件或通过符号链接改写其它文件。
+
+### Changed
+- 回归测试扩展至 172 项 / 519 次断言，覆盖协议实际分派、取消传播、配置权限、路径一致性和试用台竞态。
+
 ## [0.3.0] — 2026-07-13
 
 ### Added
@@ -114,7 +134,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.5...v0.1.8

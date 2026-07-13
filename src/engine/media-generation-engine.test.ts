@@ -157,6 +157,52 @@ describe('media-generation-engine · 预设', () => {
     expect(resolveMediaConfig({ apiKey: 'k' }, 'image')).toBeNull()
   })
 
+  test('预设模式下用户覆盖的 protocol 与 baseUrl 生效（不被 preset 强制覆盖）', () => {
+    // 选一个 Seedream 预设（默认 protocol=openai-images），用户改成自定义协议和地址
+    const cfg = resolveMediaConfig({
+      presetId: 'doubao-seedream-5-lite',
+      model: 'doubao-seedream-5-0-lite-260214',
+      apiKey: 'k',
+      protocol: 'gemini-generate-content',
+      baseUrl: 'https://my-proxy.example.com/v1',
+    }, 'image')
+    expect(cfg).not.toBeNull()
+    expect(cfg!.preset).not.toBeNull()
+    expect(cfg!.protocol).toBe('gemini-generate-content')   // 用户值生效，非 preset 的 openai-images
+    expect(cfg!.baseUrl).toBe('https://my-proxy.example.com/v1') // 用户值生效
+  })
+
+  test('预设模式下用户未覆盖 protocol 时用 preset 默认', () => {
+    const cfg = resolveMediaConfig({
+      presetId: 'doubao-seedream-5-lite',
+      model: 'doubao-seedream-5-0-lite-260214',
+      apiKey: 'k',
+    }, 'image')
+    expect(cfg!.protocol).toBe('openai-images') // preset 默认
+  })
+
+  test('预设模式的 protocol 覆盖会控制实际生成分派，而不只停留在解析结果', async () => {
+    const cfg = resolveMediaConfig({
+      presetId: 'doubao-seedream-5-lite',
+      model: 'doubao-seedream-5-0-lite-260214',
+      apiKey: 'AIza-test',
+      protocol: 'gemini-generate-content',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+    }, 'image')
+    const { fetchFn, calls } = makeSequencedFetch([{
+      ok: true,
+      json: { candidates: [{ content: { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'OVERRIDE' } }] } }] },
+    }])
+
+    const result = await generateMedia({
+      modality: 'image', prompt: 'cat', config: cfg!, apiKey: 'AIza-test', fetchFn,
+    })
+
+    expect(calls[0]!.url).toContain(':generateContent')
+    expect(calls[0]!.url).not.toContain('/images/generations')
+    expect(result.images[0]!.data).toBe('OVERRIDE')
+  })
+
   test('自定义模型按模态选择默认协议，且视频不自动开启上一轮编辑续接', () => {
     const video = resolveMediaConfig({ presetId: 'custom', model: 'my-video', apiKey: 'k' }, 'video')
     expect(video!.protocol).toBe('kling-async')
@@ -2430,12 +2476,13 @@ describe('media-generation-engine · 音频', () => {
     expect(r.images[0]!.mediaType).toBe('audio/mpeg')
   })
 
-  test('minimax music：长耗时生成不复用调用方的短超时 signal', async () => {
+  test('minimax music：调用方取消会传播到内部长超时 signal', async () => {
     const callerController = new AbortController()
     callerController.abort()
     const signals: Array<AbortSignal | null | undefined> = []
     const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       signals.push(init?.signal)
+      if (init?.signal?.aborted) throw new Error('aborted by caller')
       return {
         ok: true,
         status: 200,
@@ -2446,23 +2493,21 @@ describe('media-generation-engine · 音频', () => {
       } as Response
     }) as unknown as typeof fetch
 
-    const r = await generateMedia({
+    await expect(generateMedia({
       modality: 'audio', prompt: 'slow music', apiKey: 'k', audioTask: 'music',
       config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-2.6', audioTask: 'music' }),
       fetchFn,
       signal: callerController.signal,
-    })
+    })).rejects.toThrow('aborted by caller')
 
     expect(signals.length).toBe(1)
     expect(signals[0]).toBeDefined()
     expect(signals[0]).not.toBe(callerController.signal)
-    expect(signals[0]?.aborted).toBe(false)
-    expect(r.images[0]!.data).toBe('SUQzBA==')
+    expect(signals[0]?.aborted).toBe(true)
   })
 
   test('minimax music：audio_url 下载使用独立下载超时 signal', async () => {
     const callerController = new AbortController()
-    callerController.abort()
     const calls: Array<{ url: string; signal: AbortSignal | null | undefined }> = []
     const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -2500,6 +2545,8 @@ describe('media-generation-engine · 音频', () => {
     expect(calls[0]!.signal).not.toBe(callerController.signal)
     expect(calls[1]!.signal).not.toBe(callerController.signal)
     expect(calls[1]!.signal).not.toBe(calls[0]!.signal)
+    expect(calls[0]!.signal?.aborted).toBe(false)
+    expect(calls[1]!.signal?.aborted).toBe(false)
     expect(r.images[0]!.mediaType).toBe('audio/mpeg')
     expect(r.images[0]!.data).toBe(Buffer.from('mp3-data').toString('base64'))
   })

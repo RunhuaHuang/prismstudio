@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeFilename, persistGenerated } from './persist'
@@ -45,6 +45,29 @@ describe('persist · persistGenerated', () => {
       expect(textBlock?.text).toContain('custom-name-1.png')
     } finally {
       rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('never overwrites an existing filename or symlink target', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'duo-persist-collision-test-'))
+    const outside = join(tmpdir(), `duo-persist-outside-${Date.now()}.png`)
+    try {
+      writeFileSync(outside, 'must-stay-unchanged')
+      symlinkSync(outside, join(cwd, 'custom-name.png'))
+
+      const res = persistGenerated(
+        [{ mediaType: 'image/png', data: Buffer.from('new-image').toString('base64') }],
+        '图片',
+        { outputDir: cwd },
+        'custom-name',
+      )
+
+      expect(res.savedPaths[0]).toBe(join(cwd, 'custom-name-2.png'))
+      expect(readFileSync(res.savedPaths[0]!, 'utf-8')).toBe('new-image')
+      expect(readFileSync(outside, 'utf-8')).toBe('must-stay-unchanged')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+      rmSync(outside, { force: true })
     }
   })
 })

@@ -12,7 +12,7 @@
  * 本模块负责把结构化的 ModalityConfig 转换成引擎能直接消费的 flat credentials。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -39,7 +39,7 @@ export interface ModalityConfig {
   model?: string
   /** 可选：覆盖预设里的 baseUrl */
   baseUrl?: string
-  /** 可选：自定义协议族（仅 presetId='custom' 时有意义） */
+  /** 可选：覆盖预设协议族；custom 模式下作为所选协议 */
   protocol?: MediaProtocol
   /** 可选：音频子任务（仅 audio 模态） */
   audioTask?: 'tts' | 'music' | 'clone'
@@ -119,7 +119,9 @@ export function saveConfig(config: DuoConfig): void {
   const path = getConfigPath()
   try {
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(config, null, 2) + '\n', 'utf-8')
+    writeFileSync(path, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
+    // mode 只影响新建文件；已有文件可能来自旧版本且仍是 0644，需显式收紧。
+    if (process.platform !== 'win32') chmodSync(path, 0o600)
   } catch (err) {
     console.error(`[prismstudio] 配置文件写入失败 (${path})：`, err)
     throw err

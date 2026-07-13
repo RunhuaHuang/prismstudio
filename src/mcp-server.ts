@@ -260,6 +260,8 @@ export interface ToolContext {
   sessionId?: string
   /** 生成物输出根目录 */
   outputDir: string
+  /** MCP 调用方取消请求时传入，用于终止网络调用与轮询。 */
+  signal?: AbortSignal
 }
 
 /**
@@ -363,6 +365,7 @@ export async function runGeneration(
     aigcWatermark: optionalBoolArg(args, 'aigcWatermark', 'aigc_watermark'),
     cwd: ctx.outputDir,
     sessionId,
+    signal: ctx.signal,
   })
 
   // 仅图像走数量裁剪
@@ -427,7 +430,7 @@ export function createMcpServer(outputDirOverride?: string): Server {
   }))
 
   // 调用工具（失败软降级：返回 isError 文本而非抛异常，与 Run 一致）
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const toolName = request.params.name
     const args = (request.params.arguments ?? {}) as Record<string, unknown>
     const def = tools.find((t) => t.name === toolName)
@@ -438,7 +441,11 @@ export function createMcpServer(outputDirOverride?: string): Server {
       }
     }
     try {
-      const { content } = await runGeneration(def.modality, args, { outputDir })
+      const { content } = await runGeneration(def.modality, args, {
+        outputDir,
+        sessionId: extra.sessionId,
+        signal: extra.signal,
+      })
       return { content }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
