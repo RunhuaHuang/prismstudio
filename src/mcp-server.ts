@@ -171,10 +171,10 @@ const AUDIO_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     text: { type: 'string', description: 'Text to synthesize (for TTS/music), or description for music.' },
-    task: { type: 'string', enum: ['tts', 'music', 'clone'], description: 'Audio task: tts (default), music, or clone.' },
+    task: { type: 'string', enum: ['tts', 'music', 'clone'], description: 'Audio task. Auto-detected from the configured model (e.g. music-* models→music); set explicitly only to override.' },
     voice: { type: 'string', description: 'Voice ID/name for TTS. For clone, ignored (uses sample).' },
     instruction: { type: 'string', description: 'Optional voice style or emotion instruction.' },
-    lyrics: { type: 'string', description: 'Lyrics for music generation.' },
+    lyrics: { type: 'string', description: 'REQUIRED for music: the full lyrics text to sing, including [verse]/[chorus] structure. Do NOT put lyrics in `text`; pass them here. Omit only if lyricsOptimizer=true (auto-generate).' },
     referencePaths: { type: 'array', items: { type: 'string' }, description: 'Sample audio path for voice cloning or music-cover reference.' },
     speed: { type: 'number', description: 'Speech speed where supported.' },
     volume: { type: 'number', description: 'Speech volume where supported.' },
@@ -244,6 +244,10 @@ function buildAudioDescription(config: DuoConfig): string {
         desc += `\n\n${QWEN_TTS_VOICES}`
       } else if (resolved.config.protocol === 'minimax' || resolved.config.protocol === 'minimax-tts-async') {
         desc += `\n\n${MINIMAX_VOICES}`
+      }
+      // 音乐模型专项提示：lyrics 必填，避免 agent 把歌词误塞进 text 导致 API 报错。
+      if (/^music[-/]/.test(resolved.config.model)) {
+        desc += '\n\nIMPORTANT: 当前是音乐生成模型（music）。调用时必须提供 lyrics 参数——完整歌词文本（含 [verse]/[chorus] 分段），这是实际演唱内容；text 仅用作风格/场景描述（如"陶喆 R&B 风格，舒缓慵懒"），不要把歌词放进 text。若确实希望模型自动写词，可设 lyricsOptimizer:true 并留空 lyrics。'
       }
     }
   } catch {
