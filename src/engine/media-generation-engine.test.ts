@@ -1685,6 +1685,24 @@ describe('media-generation-engine · 视频', () => {
     expect(calls[0]!.url).toBe('https://api.minimaxi.com/v1/video_generation')
   })
 
+  // 回归：agent 常传小写分辨率（如 1080p），MiniMax 要求大写 P，引擎应自动归一化。
+  test('minimax 视频：小写分辨率 1080p 自动归一化为大写 1080P', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mvt-res' } },
+      { ok: true, json: { status: 'Success', file_id: 'file-res' } },
+      { ok: true, json: { file: { download_url: 'https://mm/res.mp4' } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      resolution: '1080p',
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1', model: 'MiniMax-Hailuo-2.3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.resolution).toBe('1080P')
+  })
+
   test('gemini-generate-content（Vertex JSON）：走 Vertex generateContent 并使用 OAuth header', async () => {
     mockGoogleTokenExchange('vertex-image-token')
     const { fetchFn, calls } = makeSequencedFetch([

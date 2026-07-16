@@ -3037,7 +3037,9 @@ async function callMinimaxVideoApi(input: GenerateMediaInput, fetchFn: typeof gl
     ...(ref ? { first_frame_image: `data:${ref.mediaType};base64,${ref.base64}` } : {}),
   }
   if (input.duration !== undefined) body.duration = input.duration
-  if (input.resolution) body.resolution = input.resolution
+  // MiniMax 要求分辨率档位带大写 P（720P / 768P / 1080P），agent 常传小写（720p），
+  // 这里归一化大小写，避免 "does not support resolution 1080p" 类报错。
+  if (input.resolution) body.resolution = input.resolution.replace(/p$/i, 'P')
   if (input.promptEnhance !== undefined) body.prompt_optimizer = input.promptEnhance
   if (input.watermark !== undefined) body.aigc_watermark = input.watermark
   const submitRes = await fetchFn(`${baseUrl}/video_generation`, {
