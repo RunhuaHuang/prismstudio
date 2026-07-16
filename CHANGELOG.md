@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-07-17
+
+### Fixed
+- 修复 `generateMedia` 入口 TTS 协议覆写缺少模态守卫，导致视频/图像任务被误改写成 `minimax-tts-async` 报「视频不支持协议族」。
+- 修复音频任务（audioTask）不跟随模型的问题：music/clone 模型残留 `audioTask='tts'` 时会互相错路由，现按 model 反查预设自动纠正。
+- 修复 MiniMax 音乐生成（music-2.6）缺 lyrics 时报 `lyrics is required`：agent 常把歌词误塞进 prompt，引擎现自动用 prompt 兜底并开启 `lyrics_optimizer`，无论 agent 如何传参都不崩。
+
+### Added
+- 新增 `MiniMax-Hailuo-2.3` 视频预设，自定义配置可按 model 自动命中。
+- `callMinimaxVideoApi` 透传 `aigc_watermark` 水印参数。
+- MiniMax 视频分辨率大小写归一化：agent 传小写 `1080p` 自动转为 `1080P`，避免无谓重试。
+- 强化 `generate_audio` 工具提示词：music 任务 lyrics 标注 REQUIRED，明确歌词须放 lyrics 不能塞 text；music 模型动态追加必填提示。
+
+### Changed
+- 回归测试扩展至 161 项，覆盖视频路由、audioTask 自动判定、music 歌词兜底、分辨率归一化。
+
 ## [0.3.1] — 2026-07-13
 
 ### Added
