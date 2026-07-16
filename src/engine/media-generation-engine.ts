@@ -361,6 +361,12 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
   },
   {
+    id: 'minimax-video-hailuo-2.3', label: 'MiniMax · Hailuo-2.3（海螺）', vendor: 'MiniMax',
+    modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1',
+    model: 'MiniMax-Hailuo-2.3', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+  },
+  {
     id: 'wanx-2-7-t2v', label: '万相 · wan2.7（智能路由）', vendor: '万相',
     modality: 'video', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     model: 'wan2.7-t2v', supportsEdit: false, defaultSize: '1280*720',
@@ -1219,13 +1225,20 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
   const modality = input.modality
   const modelPreset = input.config.preset
 
-  const configuredTask = modelPreset?.audioTask ?? input.config.audioTask
+  // preset 为 null（自定义配置）时，按 model+modality 反查预设的 audioTask：
+  // 仅当模型明确是 music/clone（非 tts）时采用反查结果，纠正下拉框残留的脏 audioTask
+  // （如 music 模型残留 'tts'）。tts 不反查，以免破坏同步/异步 TTS 的既有路由判定。
+  const presetTaskByModel = findPresetByModel(input.config.model, modality)?.audioTask
+  const resolvedTaskByModel = presetTaskByModel === 'music' || presetTaskByModel === 'clone' ? presetTaskByModel : undefined
+  const configuredTask = modelPreset?.audioTask ?? resolvedTaskByModel ?? input.config.audioTask
   // resolveMediaConfig 已经把“用户显式覆盖 > 预设默认值”的优先级折叠进
   // config.protocol。这里若再次从 preset 取值，会让解析结果看似正确、实际分派
   // 却悄悄回到预设协议，导致自定义代理/兼容协议完全不生效。
   let protocol = input.config.protocol
   // Agent 侧无实时诉求，统一让所有 MiniMax TTS 走异步长文本接口（t2a_async_v2）
-  if (protocol === 'minimax' && configuredTask === 'tts') {
+  // 仅对音频模态生效：视频/图像即使 configuredTask 落到默认 'tts' 也必须保留 'minimax' 协议族，
+  // 否则会被改写成 'minimax-tts-async'，导致视频落到不支持的协议族而报错。
+  if (modality === 'audio' && protocol === 'minimax' && configuredTask === 'tts') {
     protocol = 'minimax-tts-async'
   }
   const config = input.config
@@ -3024,8 +3037,11 @@ async function callMinimaxVideoApi(input: GenerateMediaInput, fetchFn: typeof gl
     ...(ref ? { first_frame_image: `data:${ref.mediaType};base64,${ref.base64}` } : {}),
   }
   if (input.duration !== undefined) body.duration = input.duration
-  if (input.resolution) body.resolution = input.resolution
+  // MiniMax 要求分辨率档位带大写 P（720P / 768P / 1080P），agent 常传小写（720p），
+  // 这里归一化大小写，避免 "does not support resolution 1080p" 类报错。
+  if (input.resolution) body.resolution = input.resolution.replace(/p$/i, 'P')
   if (input.promptEnhance !== undefined) body.prompt_optimizer = input.promptEnhance
+  if (input.watermark !== undefined) body.aigc_watermark = input.watermark
   const submitRes = await fetchFn(`${baseUrl}/video_generation`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
@@ -3328,6 +3344,16 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
     }
 
     const audioFormat = input.audioFormat ?? 'mp3'
+    // 兜底：music 任务缺 lyrics 时，MiniMax 会报 "lyrics is required"。
+    // agent 常把歌词误塞进 prompt 而忘传 lyrics，这里把 prompt 降级为歌词，并自动开启
+    // lyrics_optimizer（让模型据 prompt 润色词作结构），保证无论 agent 如何传参都不崩。
+    // 纯音乐（instrumental）允许留空歌词。
+    let effectiveLyrics = lyrics
+    let effectiveLyricsOptimizer = input.lyricsOptimizer
+    if (!effectiveLyrics && !input.instrumental) {
+      effectiveLyrics = input.prompt?.trim() || undefined
+      if (effectiveLyrics) effectiveLyricsOptimizer = effectiveLyricsOptimizer ?? true
+    }
     const body: Record<string, unknown> = {
       model,
       prompt: input.prompt,
@@ -3337,9 +3363,9 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
         format: audioFormat,
       },
     }
-    if (lyrics) body.lyrics = lyrics
+    if (effectiveLyrics) body.lyrics = effectiveLyrics
     if (input.instrumental !== undefined) body.is_instrumental = input.instrumental
-    if (input.lyricsOptimizer !== undefined) body.lyrics_optimizer = input.lyricsOptimizer
+    if (effectiveLyricsOptimizer !== undefined) body.lyrics_optimizer = effectiveLyricsOptimizer
     if (input.musicOutputFormat) body.output_format = input.musicOutputFormat
     if (input.aigcWatermark !== undefined) body.aigc_watermark = input.aigcWatermark
     if (coverFeatureId) body.cover_feature_id = coverFeatureId

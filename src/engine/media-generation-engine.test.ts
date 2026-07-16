@@ -1638,6 +1638,71 @@ describe('media-generation-engine · 视频', () => {
     }
   })
 
+  // 回归：自定义路径（preset=null）下 video + MiniMax-Hailuo-2.3 即使落入默认 audioTask='tts'，
+  // 也必须保留 'minimax' 协议族走 /video_generation，而不是被改写成 'minimax-tts-async' 报错。
+  test('minimax 文生视频：自定义模型 + 默认 audioTask=tts 不再误路由到 tts 协议族', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mvt-ttv' } },
+      { ok: true, json: { status: 'Success', file_id: 'file-ttv' } },
+      { ok: true, json: { file: { download_url: 'https://mm/ttv.mp4' } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '夏威夷海滩', apiKey: 'k', pollIntervalMs: 0,
+      duration: 6, watermark: true,
+      config: makeImageConfig({
+        modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1',
+        model: 'MiniMax-Hailuo-2.3', preset: null, audioTask: 'tts',
+      }),
+      fetchFn,
+    })
+    expect(calls[0]!.url).toBe('https://api.minimaxi.com/v1/video_generation')
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.model).toBe('MiniMax-Hailuo-2.3')
+    // aigc_watermark 应被透传
+    expect(body.aigc_watermark).toBe(true)
+    // resolution 未传时不强行塞入
+    expect(body.resolution).toBeUndefined()
+  })
+
+  // 回归：命中新增 Hailuo-2.3 预设时，video 不应再被音频 TTS 覆写逻辑波及。
+  test('minimax 文生视频：命中 Hailuo-2.3 预设时路由到 /video_generation', async () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'minimax-video-hailuo-2.3')!
+    expect(preset).toBeDefined()
+    expect(preset.model).toBe('MiniMax-Hailuo-2.3')
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mvt-preset' } },
+      { ok: true, json: { status: 'Success', file_id: 'file-preset' } },
+      { ok: true, json: { file: { download_url: 'https://mm/preset.mp4' } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      resolution: '1080P',
+      config: makeImageConfig({ preset, modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1', model: 'MiniMax-Hailuo-2.3' }),
+      fetchFn,
+    })
+    expect(calls[0]!.url).toBe('https://api.minimaxi.com/v1/video_generation')
+  })
+
+  // 回归：agent 常传小写分辨率（如 1080p），MiniMax 要求大写 P，引擎应自动归一化。
+  test('minimax 视频：小写分辨率 1080p 自动归一化为大写 1080P', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mvt-res' } },
+      { ok: true, json: { status: 'Success', file_id: 'file-res' } },
+      { ok: true, json: { file: { download_url: 'https://mm/res.mp4' } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      resolution: '1080p',
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1', model: 'MiniMax-Hailuo-2.3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.resolution).toBe('1080P')
+  })
+
   test('gemini-generate-content（Vertex JSON）：走 Vertex generateContent 并使用 OAuth header', async () => {
     mockGoogleTokenExchange('vertex-image-token')
     const { fetchFn, calls } = makeSequencedFetch([
@@ -2474,6 +2539,39 @@ describe('media-generation-engine · 音频', () => {
     expect(body.lyrics).toBe('[verse]\nhello')
     expect(r.images[0]!.data).toBe('SUQzBA==')
     expect(r.images[0]!.mediaType).toBe('audio/mpeg')
+  })
+
+  // 回归：脏配置——模型是 music-2.6 但 config.audioTask 残留 'tts'，且请求未显式传 task。
+  // 必须由模型预设自动判定为 music 路径，而非被脏的 tts 带到 TTS 端点。
+  test('audioTask 自动跟随模型预设：music 模型 + config.audioTask=tts 不传 task → 仍走 music 路径', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { data: { audio: '49443304', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } } },
+    ])
+    await generateMedia({
+      modality: 'audio', prompt: 'R&B 风格', lyrics: '[verse]\n西湖的盛夏', apiKey: 'k',
+      config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-2.6', audioTask: 'tts' }),
+      fetchFn,
+    })
+    expect(calls[0]!.url).toBe('https://api.minimax.chat/v1/music_generation')
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.model).toBe('music-2.6')
+    expect(body.lyrics).toBe('[verse]\n西湖的盛夏')
+  })
+
+  // 根治回归：agent 常把歌词误塞进 prompt 而忘传 lyrics，导致 MiniMax 报 "lyrics is required"。
+  // 引擎应在缺 lyrics 时自动用 prompt 兜底，并开启 lyrics_optimizer 让模型润色词作结构。
+  test('minimax music：缺 lyrics 时自动用 prompt 兜底并开启 lyrics_optimizer', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { data: { audio: '49443304', status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } } },
+    ])
+    await generateMedia({
+      modality: 'audio', prompt: '七月的杭州像个蒸笼 断桥石板烫到脚不敢碰', apiKey: 'k',
+      config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-2.6', audioTask: 'music' }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.lyrics).toBe('七月的杭州像个蒸笼 断桥石板烫到脚不敢碰')
+    expect(body.lyrics_optimizer).toBe(true)
   })
 
   test('minimax music：调用方取消会传播到内部长超时 signal', async () => {
