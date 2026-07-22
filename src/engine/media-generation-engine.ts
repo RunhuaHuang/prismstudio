@@ -80,6 +80,12 @@ export interface MediaModelPreset {
   editModel?: string
   supportsEdit: boolean
   defaultSize: string
+  /**
+   * Gemini 协议族（gemini-generate-content）专属：默认 imageSize（1K/2K/4K）。
+   * Gemini 的分辨率由调用时传的 imageSize 参数控制，defaultSize（比例格式如 "1:1"）对它无效，
+   * 故用本字段把预设声明的分辨率透传到 callGeminiImageApi；用户显式传 imageSize 时覆盖之。
+   */
+  defaultImageSize?: '1K' | '2K' | '4K'
   /** 音频子任务：tts | music | clone */
   audioTask?: 'tts' | 'music' | 'clone'
   helpUrl?: string
@@ -101,6 +107,28 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     modality: 'image', protocol: 'openai-images', baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-image-1', supportsEdit: true, defaultSize: '1024x1024',
     helpUrl: 'https://platform.openai.com/api-keys',
+  },
+  {
+    // woyaopro生图（iiiiitoken 网关）：OpenAI 兼容协议，baseUrl 不含 /v1，
+    // 端点拼成 https://api.iiiiitoken.com/images/generations（与官方 curl 一致）。
+    // 该网关只有 gpt-image-2-x 一个模型名（1k/2k/4k 后缀均 404），分辨率靠 size 参数控制。
+    // 拆成 3 条预设仅为让用户在下拉里直观选择分辨率；三条底层 model 相同，靠 presetId 区分命中。
+    id: 'woyaopro-gpt-image-2-x-1k', label: 'woyaopro生图 · gpt-image-2-x (1K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'openai-images', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gpt-image-2-x', supportsEdit: false, defaultSize: '1024x1024',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gpt-image-2-x-2k', label: 'woyaopro生图 · gpt-image-2-x (2K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'openai-images', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gpt-image-2-x', supportsEdit: false, defaultSize: '2048x1536',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gpt-image-2-x-4k', label: 'woyaopro生图 · gpt-image-2-x (4K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'openai-images', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gpt-image-2-x', supportsEdit: false, defaultSize: '3840x2160',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
   },
   // ===== 图像：Google Gemini（nano-banana / Gemini Image，原生多轮编辑） =====
   {
@@ -145,6 +173,55 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     baseUrl: 'https://aiplatform.googleapis.com',
     model: 'gemini-3.1-flash-lite-image', supportsEdit: true, defaultSize: '1:1',
     helpUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/start/quickstarts/quickstart-multimodal',
+  },
+  {
+    // woyaopro生图 的 Gemini 接口：复用官方 gemini-generate-content 协议族。
+    // 实测三种 auth 头组合（x-goog-api-key / Bearer / 双发）均 200，项目现有 api-key 分支直接兼容。
+    // 端点经 normalizeGoogleGeminiApiRoot 规整后拼成
+    // https://api.iiiiitoken.com/v1beta/models/<model>:generateContent（与官方文档一致）。
+    // 两个模型：gemini-3.1-flash-image（flash）/ gemini-3-pro-image（pro，注意不带 .1；
+    //   gemini-3.1-pro-image 在该网关 is not supported）。
+    // 分辨率靠 imageSize 参数控制（defaultSize 对 Gemini 无效），故用 defaultImageSize 透传；
+    // 每个模型拆 3 条预设（1K/2K/4K）仅为让用户直观选择分辨率，底层靠 presetId 区分命中。
+    //
+    // ⚠️ 顺序：刻意放在官方 Google Gemini / Vertex 预设之后。findPresetByModel / findPresetForCredentials
+    // 在「无 presetId 的回退路径」里用 Array.find 取首条；woyaopro 的 flash 与官方同名
+    //（model 都是 gemini-3.1-flash-image、protocol 都是 gemini-generate-content），若 woyaopro 在前，
+    // 会劫持手动填 model（未选预设）的官方 Gemini 用户。放在官方之后，回退优先命中官方。
+    id: 'woyaopro-gemini-flash-1k', label: 'woyaopro生图 · Gemini Flash Image (1K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '1K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gemini-flash-2k', label: 'woyaopro生图 · Gemini Flash Image (2K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '2K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gemini-flash-4k', label: 'woyaopro生图 · Gemini Flash Image (4K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3.1-flash-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '4K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gemini-pro-1k', label: 'woyaopro生图 · Gemini Pro Image (1K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3-pro-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '1K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gemini-pro-2k', label: 'woyaopro生图 · Gemini Pro Image (2K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3-pro-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '2K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
+  },
+  {
+    id: 'woyaopro-gemini-pro-4k', label: 'woyaopro生图 · Gemini Pro Image (4K)', vendor: 'woyaopro生图',
+    modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://api.iiiiitoken.com',
+    model: 'gemini-3-pro-image', supportsEdit: true, defaultSize: '1:1', defaultImageSize: '4K',
+    helpUrl: 'https://woyao.pro/i/5MLA4',
   },
   {
     id: 'doubao-seedream-5-pro', label: '豆包 · Seedream 5.0 Pro（火山方舟）', vendor: '火山 API',
@@ -1777,7 +1854,11 @@ async function callGeminiImageApi(
   // 不回退到通用 size（"1024x1024" 风格），否则会触发 Gemini API 400（aspectRatio 仅接受比例枚举）。
   const aspectRatio = input.aspectRatio?.trim() || undefined
 
-  const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, input.imageSize)
+  // imageSize：用户显式传入优先；否则回退到预设声明的 defaultImageSize（Gemini 分辨率由此控制，
+  // defaultSize 字段对 Gemini 无效）。两者都缺时 buildGeminiRequest 会附加默认 auto。
+  const imageSize = input.imageSize?.trim() || input.config.preset?.defaultImageSize || undefined
+
+  const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, imageSize)
   const target = await buildGoogleGenerateContentRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model })
 
   const response = await fetchFn(target.url, {

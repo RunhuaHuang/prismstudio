@@ -348,6 +348,8 @@ textarea{resize:vertical;line-height:1.6}
 .reset-btn:hover{color:var(--signal)}
 .ch-help{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);
   margin-top:var(--space-xs);line-height:1.5;word-break:break-all}
+.ch-help a{color:#58a6ff;text-decoration:none}
+.ch-help a:hover{text-decoration:underline}
 .endpoint-preview{
   font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--signal-dim);
   margin-top:var(--space-xs);line-height:1.5;word-break:break-all;
@@ -617,7 +619,9 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
                 </template>
               </div>
             </div>
-            <div class="ch-help" x-show="presetHelp(m.key)" x-text="presetHelp(m.key)"></div>
+            <div class="ch-help" x-show="presetHelp(m.key)">
+              <a :href="presetHelp(m.key)" target="_blank" rel="noopener noreferrer">🔗 <span x-text="t.getApiKey"></span></a>
+            </div>
           </div>
 
           <div class="ch-field">
@@ -1044,6 +1048,7 @@ function prismApp() {
         customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
         showKey: '显示密钥', hideKey: '隐藏密钥',
+        getApiKey: '获取 API Key',
         labelBaseUrl: 'Base URL',
         btnResetDefault: '恢复默认',
         labelProtocol: '接口协议',
@@ -1093,6 +1098,7 @@ function prismApp() {
         customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
         showKey: 'Show key', hideKey: 'Hide key',
+        getApiKey: 'Get API Key',
         labelBaseUrl: 'Base URL',
         btnResetDefault: 'Reset',
         labelProtocol: 'Protocol',
@@ -1531,8 +1537,9 @@ function prismApp() {
       return byPreset;
     },
     presetHelp(key) {
-      // BaseURL 已有独立可编辑输入框展示，这里不再显示技术细节，返回空隐藏整行。
-      return '';
+      // 返回当前预设的 helpUrl（申请 API Key 等引导页）；custom 无预设则返回空隐藏整行。
+      const p = (this.presets[key] || []).find(x => x.id === this.config[key]?.presetId);
+      return p?.helpUrl || '';
     },
     // 当前 preset 的默认 BaseURL（custom 无默认值）
     presetBaseUrl(key) {

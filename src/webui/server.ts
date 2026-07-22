@@ -23,7 +23,6 @@ import {
   loadConfig,
   saveConfig,
   getConfigPath,
-  getConfigDir,
   getDefaultOutputDir,
   getModalityConfig,
   isModalityReady,
@@ -444,10 +443,11 @@ async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
   const prompt = body.prompt?.trim()
   if (!prompt) throw new Error('prompt 不能为空')
 
-  // 试用产物落盘目录：用户在试用台指定的优先，否则落到默认 ~/.prismstudio/playground/
+  // 试用产物落盘目录：用户在试用台指定的优先，否则落到与正式生成物一致的非隐藏目录
+  // ~/prismstudio/playground/（getDefaultOutputDir 已与配置目录 ~/.prismstudio 分离）。
   const playgroundDir = body.outputDir?.trim()
     ? resolve(body.outputDir.trim())
-    : resolve(getConfigDir(), 'playground')
+    : resolve(getDefaultOutputDir(), 'playground')
   mkdirSync(playgroundDir, { recursive: true })
 
   const { images: generated } = await generateMedia({

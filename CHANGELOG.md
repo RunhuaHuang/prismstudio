@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-22
+
+### Added
+- 接入 **woyaopro生图** 渠道（iiiiitoken 网关，OpenAI 兼容 + Gemini 双协议），共 9 条图像预设：
+  - `gpt-image-2-x`：1K / 2K / 4K 三档分辨率（openai-images 协议）。
+  - `gemini-3.1-flash-image`（Flash）：1K / 2K / 4K 三档（gemini-generate-content 协议，原生多轮编辑）。
+  - `gemini-3-pro-image`（Pro）：1K / 2K / 4K 三档（gemini-generate-content 协议）。
+- `MediaModelPreset` 新增 `defaultImageSize` 字段：Gemini 协议的分辨率由调用时的 `imageSize` 参数控制（`defaultSize` 对它无效），该字段把预设声明的分辨率透传到 `callGeminiImageApi`，使每条 Gemini 预设按声明的 1K/2K/4K 真实出图。
+- WebUI 模型下拉切换到带 `helpUrl` 的预设后，输入框下方显示 `🔗 获取 API Key` 可点击链接（新标签打开申请页）；woyaopro 渠道指向 `https://woyao.pro/i/5MLA4`。
+
+### Changed
+- 生成物默认输出目录从隐藏的 `~/.prismstudio/` 改为非隐藏的 `~/prismstudio/`，方便用户在 Finder / 文件管理器中直接查看生成结果；配置与密钥文件仍保留在 `~/.prismstudio/`。WebUI 试用台（playground）产物目录同步调整为 `~/prismstudio/playground/`。
+
+### Fixed
+- 修复 woyaopro Gemini 预设（`gemini-3.1-flash-image` 与官方 Google Gemini 同名同协议）因数组顺序靠前，在「手动填 model、未选预设」的回退路径中劫持官方 Gemini 用户的问题。现把 woyaopro 预设排到官方之后，`findPresetByModel` 回退优先命中官方。
+
 ## [0.3.2] — 2026-07-17
 
 ### Fixed
@@ -150,7 +166,9 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.1.8...v0.2.0

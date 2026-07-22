@@ -87,12 +87,15 @@ export function getConfigDir(): string {
 
 /**
  * 生成物默认输出「根目录」（outputDir 未配置时的回退值）。
- * 注意：返回的是配置目录本身，不含 generated-media 子目录——子目录由
- * runGeneration 的 resolve(ctx.outputDir, 'generated-media') 统一拼接，
+ *
+ * 刻意与配置目录（~/.prismstudio，隐藏、存放 config.json 等含密钥文件）分离：
+ * 生成物（图/视频/音频）落到非隐藏的 ~/prismstudio，方便用户在 Finder 里直接查看。
+ * 不含 generated-media 子目录——子目录由 runGeneration 的
+ * resolve(ctx.outputDir, 'generated-media') 统一拼接，
  * 避免出现 generated-media/generated-media 双层目录。
  */
 export function getDefaultOutputDir(): string {
-  return getConfigDir()
+  return join(homedir(), 'prismstudio')
 }
 
 // ===== 读写 =====
