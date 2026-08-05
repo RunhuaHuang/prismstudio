@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### Added
+- 新增 **MiniMax H3**（海螺）视频预设：2026-07-31 发布的当前旗舰，全模态输入（文/图/视频/音频）、原生 2K、最长 15s、立体声同步。H3 改用全新 v2 接口（`/v2/video_generation` + `/v2/query/video_generation/{id}`，请求体为 `content` 数组结构），故新增 `minimax-video-v2` 协议族。
+- 新增 **MiniMax Hailuo-2.3-Fast** 视频预设（图生视频快速版，走原 v1 `video_generation` 端点）。
+- 新增 **MiniMax music-3.0** 音乐生成预设（新一代音乐模型，沿用 `minimax` 协议族 + `music` 任务路由）。
+- 新增 **万相 wan2.7-image-pro / wan2.7-image** 图像预设：支持文生图/图生组图/图像编辑/多图参考，Pro 档支持 4K 直出与 12 种语言文字渲染。`formatDashscopeMultimodalImageSize` 为 Pro 档放开像素上限（4096²），并放宽参考图校验让 Pro 支持多图参考。
+
+### Changed
+- 同步更新 README / README.en 能力总览：预置模型 60→82、协议族 14→18、厂商 13→16，各模态模型表补全 MiniMax H3 / music-3.0、万相 2.7-image 系列等新成员。
+- WebUI 自定义模式「协议」下拉与端点路径映射（`PROTOCOL_ENDPOINT_PATH` / `PROTOCOL_OPTIONS`）补全 `minimax-video-v2` 协议（中英双语）。
+
+### Fixed
+- 修复 MiniMax H3（`minimax-video-v2`）`ratio` 字段按官方文档分场景处理：① 纯文生视频（t2va）必须显式指定具体比例且不能为 `adaptive`（否则 API 400，错误 2013），现按 `size`/`aspectRatio`/预设 `defaultSize` 自动推导并兜底 16:9；② 图生视频（i2va，content 含图片）官方规定 ratio 恒为 `adaptive`（由首帧图决定，传其他值会被忽略），现显式传 `adaptive` 而非强行推导。
+- 修复图片生成显式 `numberOfImages` 被 prompt 里的自然语言数量词静默覆盖（如传 4 张但 prompt 写"一张"时只返回 1 张）。现显式参数优先，未显式时才从 prompt 解析。
+- 修复 `extForMediaType` 对 `audio/opus` / `video/x-matroska` 标错扩展名（分别落到 `.wav` / `.mp4`），与引擎 `EXT_TO_MIME` 表不一致。现正确输出 `.opus` / `.mkv`。
+- 修复 `audioTask`（`task` 参数）非法值在自定义配置下静默落到 TTS 分支的问题，现显式校验并报错（可选值 tts/music/clone）。新增 `requireEnumArg` 统一枚举校验（非法值抛错、空值放行），取代原先"手动抛错 + optionalEnumStringArg 静默丢弃"的双策略冗余写法。
+- 修复 google-auth 两处 Vertex URL 构造缺陷：① 完整 `:predictLongRunning` 端点作 baseUrl 时被二次追加成双后缀；② api-key 的 Omni `interactions` 完整端点被拼出双段路径。均导致 404。另修复无法解析的自定义 Vertex baseUrl 被静默丢弃、直接请求官方域名（绕过企业代理）的问题——现改为明确报错。
+- 新增 `src/engine/google-auth.test.ts`（14 项），补齐 google-auth URL 构造测试覆盖。
+- 修复图片数量裁剪回归：未显式传 `numberOfImages` 时不再被 `defaultCount: 1` 兜底，Gemini 等"prompt 驱动多图"（如"生成 4 张图"）不再被静默裁成 1 张；显式参数仍优先。
+- 修复 H3 轮询对未知/缺失任务状态静默空转到硬超时的问题，现立即报错（与 DashScope 轮询约定一致）。
+- 修复 H3 duration 对 NaN/非有限值无防护的问题；H3 现在支持从 prompt 解析时长与竖屏比例（与其他视频协议一致）。
+- 修复 H3 `resolution` 对不支持的值（如 `1080p`）静默兜底到更贵的 2K 档的问题——H3 官方仅支持 `768P`/`2K` 两档，现对无法识别的分辨率显式报错，避免按量计费时的意外成本。同时修正 `resolution` 误从 `size`（可能是比例 `9:16`）回退导致的混淆，现仅从专用 `resolution` 参数取值。
+- 修复万相 wan2.7-image（非 Pro）被参考图守卫误拒的问题——官方文档确认其支持图生图/编辑；另按官方限制将 wan2.7-image-pro 的 4K 限定在文生图场景（编辑/图生图最高 2K）。
+- 修复 WebUI `PUT /api/config` 缺少 body 形状校验的问题——`[]`/`"string"`/`{image:null}` 等错误体此前可清空或破坏 config.json（明文 Key 永久丢失）；现校验并拒绝。
+- 修复 `maskApiKey` 对非字符串 key（坏数据）抛 TypeError 导致 WebUI `GET /api/config` 永久 500 的问题，现类型守卫返回空。
+- 修复清空顶层 API Key 不清理 `apiKeyByVendor` / `apiKeyByPreset` 记忆导致"已删除密钥复活"的问题，现清空时同步删除对应记忆条目。
+
 ## [0.4.0] — 2026-07-22
 
 ### Added

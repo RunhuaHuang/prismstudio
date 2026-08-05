@@ -230,7 +230,7 @@ function normalizeGoogleAiplatformModelGardenHost(hostname: string): string {
 }
 
 function stripKnownProviderEndpoint(pathname: string): string {
-  const endpointSuffixes = ['/chat/completions', '/responses', '/messages', '/models', '/images/generations', '/images/edits']
+  const endpointSuffixes = ['/chat/completions', '/responses', '/messages', '/models', '/images/generations', '/images/edits', '/interactions']
   for (const suffix of endpointSuffixes) {
     if (pathname.endsWith(suffix)) return pathname.slice(0, -suffix.length)
   }
@@ -271,6 +271,7 @@ export function resolveGoogleVertexGenerateContentUrl(input: { baseUrl?: string;
   const projectId = input.projectId?.trim()
 
   if (baseUrl) {
+    let parsedOk = true
     try {
       const url = new URL(baseUrl)
       url.search = ''
@@ -281,6 +282,8 @@ export function resolveGoogleVertexGenerateContentUrl(input: { baseUrl?: string;
         url.pathname = url.pathname.slice(0, -':streamGenerateContent'.length) + ':generateContent'
         return url.toString()
       }
+      // Veo predictLongRunning 完整端点：不能落入下方 /publishers/google/models/ 分支被二次追加。
+      if (url.pathname.endsWith(':predictLongRunning')) return url.toString()
       if (url.pathname.endsWith(':generateContent')) return url.toString()
 
       const trimmedPath = url.pathname.replace(/\/+$/, '')
@@ -298,7 +301,13 @@ export function resolveGoogleVertexGenerateContentUrl(input: { baseUrl?: string;
         return url.toString()
       }
     } catch {
-      // fall through
+      parsedOk = false
+    }
+    // 用户显式配置了自定义 baseUrl，但既不是 aiplatform 官方域名、pathname 又没含
+    // /projects/.../locations/ 结构：不能静默丢弃 baseUrl 直接请求官方域名（会绕过
+    // 企业代理），应给出明确错误让用户修正配置。
+    if (parsedOk) {
+      throw new Error(`无法从 Base URL 解析 Vertex 请求路径: ${baseUrl}。请填写官方 aiplatform 域名，或包含 /projects/.../locations/ 的完整端点路径`)
     }
   }
 
@@ -309,6 +318,18 @@ export function resolveGoogleVertexGenerateContentUrl(input: { baseUrl?: string;
 }
 
 function resolveGoogleVertexPredictLongRunningUrl(input: { baseUrl?: string; modelId: string; projectId?: string }): string {
+  const baseUrl = input.baseUrl?.trim()
+  if (baseUrl) {
+    try {
+      const url = new URL(baseUrl)
+      if (url.pathname.endsWith(':predictLongRunning')) {
+        url.search = ''
+        return url.toString()
+      }
+    } catch {
+      // fall through
+    }
+  }
   return resolveGoogleVertexGenerateContentUrl(input).replace(/:generateContent$/, ':predictLongRunning')
 }
 
@@ -317,6 +338,7 @@ function resolveGoogleVertexInteractionsUrl(input: { baseUrl?: string; projectId
   const projectId = input.projectId?.trim()
 
   if (baseUrl) {
+    let parsedOk = true
     try {
       const url = new URL(baseUrl)
       url.search = ''
@@ -333,7 +355,11 @@ function resolveGoogleVertexInteractionsUrl(input: { baseUrl?: string; projectId
         return url.toString()
       }
     } catch {
-      // fall through
+      parsedOk = false
+    }
+    // 与 generateContent 一致：自定义 baseUrl 无法解析时给出明确错误，而非静默丢弃。
+    if (parsedOk) {
+      throw new Error(`无法从 Base URL 解析 Vertex interactions 路径: ${baseUrl}。请填写官方 aiplatform 域名，或包含 /projects/.../locations/ 的完整端点路径`)
     }
   }
 

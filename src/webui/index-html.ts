@@ -878,6 +878,7 @@ const PROTOCOL_ENDPOINT_PATH = {
   'gemini-generate-content': {},                 // 动态：buildGoogleGenerateContentRequestTarget 构造
   'dashscope-async': { image: '/services/aigc/image-generation/generation', video: '/services/aigc/video-generation/video-synthesis' },
   'minimax': { image: '/image_generation', video: '/video_generation', audio: '/t2a_v2' },
+  'minimax-video-v2': { video: '/video_generation' }, // MiniMax H3：baseUrl 已含 /v2，查询走 /query/video_generation/{id}
   'stability': {},                               // baseUrl 本身已含完整路径 + /{model}
   'tencent-hunyuan-async': {},                   // 动态：按图/视频 + 路径前缀
   'midjourney': { image: '/mj/submit/imagine' },
@@ -910,6 +911,7 @@ const PROTOCOL_OPTIONS = {
       { value: 'zhipu-async', label: '智谱（异步）' },
       { value: 'dashscope-async', label: '阿里 DashScope（异步）' },
       { value: 'minimax', label: 'MiniMax' },
+      { value: 'minimax-video-v2', label: 'MiniMax H3（V2 接口）' },
       { value: 'tencent-hunyuan-async', label: '腾讯混元（异步）' },
       { value: 'google-interactions', label: 'Google Interactions' },
     ],
@@ -939,6 +941,7 @@ const PROTOCOL_OPTIONS = {
       { value: 'zhipu-async', label: 'Zhipu (async)' },
       { value: 'dashscope-async', label: 'Alibaba DashScope (async)' },
       { value: 'minimax', label: 'MiniMax' },
+      { value: 'minimax-video-v2', label: 'MiniMax H3 (V2 API)' },
       { value: 'tencent-hunyuan-async', label: 'Tencent Hunyuan (async)' },
       { value: 'google-interactions', label: 'Google Interactions' },
     ],

@@ -2,7 +2,39 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sanitizeFilename, persistGenerated } from './persist'
+import { sanitizeFilename, persistGenerated, extForMediaType } from './persist'
+
+describe('persist · extForMediaType', () => {
+  test('image MIME → 正确扩展名', () => {
+    expect(extForMediaType('image/png')).toBe('.png')
+    expect(extForMediaType('image/jpeg')).toBe('.jpg')
+    expect(extForMediaType('image/webp')).toBe('.webp')
+    expect(extForMediaType('image/gif')).toBe('.gif')
+  })
+
+  test('video MIME → 正确扩展名', () => {
+    expect(extForMediaType('video/mp4')).toBe('.mp4')
+    expect(extForMediaType('video/webm')).toBe('.webm')
+    expect(extForMediaType('video/quicktime')).toBe('.mov')
+    // 回归：matroska 不再落到默认 .mp4
+    expect(extForMediaType('video/x-matroska')).toBe('.mkv')
+  })
+
+  test('audio MIME → 正确扩展名', () => {
+    expect(extForMediaType('audio/mpeg')).toBe('.mp3')
+    expect(extForMediaType('audio/wav')).toBe('.wav')
+    expect(extForMediaType('audio/flac')).toBe('.flac')
+    expect(extForMediaType('audio/ogg')).toBe('.ogg')
+    expect(extForMediaType('audio/aac')).toBe('.aac')
+    expect(extForMediaType('audio/mp4')).toBe('.m4a')
+    // 回归：opus 不再落到默认 .wav
+    expect(extForMediaType('audio/opus')).toBe('.opus')
+  })
+
+  test('未知类型落到 .bin', () => {
+    expect(extForMediaType('application/octet-stream')).toBe('.bin')
+  })
+})
 
 describe('persist · sanitizeFilename', () => {
   test('removes extension and unsafe path characters', () => {

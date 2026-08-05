@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isLoopbackAuthority, mergeConfigPreservingMaskedKeys, resolveGeneratedMediaDir, resolveTestCredentials, validateLocalApiRequest } from './server'
+import { isLoopbackAuthority, maskApiKey, mergeConfigPreservingMaskedKeys, resolveGeneratedMediaDir, resolveTestCredentials, validateLocalApiRequest } from './server'
 
 describe('webui server · output path', () => {
   test('always treats configured outputDir as a root, including roots named generated-media', () => {
@@ -201,5 +201,75 @@ describe('webui server · playground credentials', () => {
         apiKey: 'old-doubao-key',
       },
     })).toThrow(/当前模型的 API Key/)
+  })
+
+  // 回归：顶层 apiKey 清空时，同步删除 vendor/preset 记忆，避免"删掉的 key 复活"。
+  test('clearing top-level apiKey also removes vendor/preset key memory', () => {
+    const merged = mergeConfigPreservingMaskedKeys(
+      {
+        image: {
+          enabled: true,
+          presetId: 'gemini-flash-image',
+          apiKey: 'real-google-key',
+          apiKeyByVendor: { 'Google Gemini': 'real-google-key' },
+          apiKeyByPreset: { 'gemini-flash-image': 'real-google-key' },
+        },
+      },
+      {
+        image: {
+          enabled: true,
+          presetId: 'gemini-flash-image',
+          apiKey: '', // 用户清空
+          apiKeyByVendor: { 'Google Gemini': '' },
+          apiKeyByPreset: { 'gemini-flash-image': '' },
+        },
+      },
+    )
+    expect(merged.image?.apiKey).toBe('')
+    expect(merged.image?.apiKeyByVendor?.['Google Gemini']).toBeUndefined()
+    expect(merged.image?.apiKeyByPreset?.['gemini-flash-image']).toBeUndefined()
+  })
+
+  // 回归：mergeMaskedStringMap 空字符串删除磁盘条目（而非保留），脱敏占位仍保留原值。
+  test('mergeMaskedStringMap: empty string deletes entry, masked placeholder preserves', () => {
+    const merged = mergeConfigPreservingMaskedKeys(
+      {
+        image: {
+          enabled: true,
+          presetId: 'gemini-flash-image',
+          apiKey: 'real-google-key',
+          apiKeyByVendor: { 'Google Gemini': 'real-google-key', 'Other Vendor': 'other-key' },
+        },
+      },
+      {
+        image: {
+          enabled: true,
+          presetId: 'gemini-flash-image',
+          apiKey: 'real****-key',
+          apiKeyByVendor: { 'Google Gemini': 'real****-key', 'Other Vendor': '' },
+        },
+      },
+    )
+    // 脱敏占位 → 保留原值
+    expect(merged.image?.apiKeyByVendor?.['Google Gemini']).toBe('real-google-key')
+    // 空字符串 → 删除
+    expect(merged.image?.apiKeyByVendor?.['Other Vendor']).toBeUndefined()
+  })
+
+  // 回归：maskApiKey 对非字符串（坏数据）不抛 TypeError，避免 GET /api/config 永久 500。
+  test('maskApiKey handles non-string and empty inputs without throwing', () => {
+    expect(maskApiKey('')).toBe('')
+    expect(maskApiKey(12345 as unknown as string)).toBe('')
+    expect(maskApiKey(null as unknown as string)).toBe('')
+    expect(maskApiKey(undefined as unknown as string)).toBe('')
+  })
+
+  test('maskApiKey masks string keys and GCP JSON without leaking full secret', () => {
+    expect(maskApiKey('sk-1234567890abcdef')).toBe('sk-1****cdef')
+    expect(maskApiKey('short')).toBe('****')
+    // GCP JSON：只暴露 type 和 projectId，不暴露 private_key
+    const gcp = maskApiKey(JSON.stringify({ type: 'service_account', project_id: 'my-proj', private_key: 'SECRET' }))
+    expect(gcp).toBe('JSON:service_account:my-proj·****')
+    expect(gcp).not.toContain('SECRET')
   })
 })
