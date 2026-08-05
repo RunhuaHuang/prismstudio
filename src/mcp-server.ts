@@ -92,6 +92,34 @@ function optionalEnumStringArg<T extends string>(
   return undefined
 }
 
+/**
+ * 枚举参数校验：取到非空值时必须是 allowed 之一，否则显式抛错（避免自定义配置下
+ * 非法值被静默当未传、进而用错误模型请求，如非法 task 落到 TTS 分支）；
+ * 未传 / 空字符串时返回 undefined。与 optionalEnumStringArg 的"静默丢弃"相反，
+ * 适用于对业务路由有决定性影响的参数。
+ */
+function requireEnumArg<T extends string>(
+  args: Record<string, unknown>,
+  allowed: readonly T[],
+  argLabel: string,
+  ...keys: string[]
+): T | undefined {
+  for (const key of keys) {
+    const value = args[key]
+    if (value === undefined || value === null) continue
+    if (typeof value !== 'string') {
+      throw new Error(`${argLabel} 参数无效: ${String(value)}，可选值: ${allowed.join(', ')}`)
+    }
+    const trimmed = value.trim()
+    if (!trimmed) continue // 空字符串视为未传
+    if (!(allowed as readonly string[]).includes(trimmed)) {
+      throw new Error(`${argLabel} 参数无效: ${trimmed}，可选值: ${allowed.join(', ')}`)
+    }
+    return trimmed as T
+  }
+  return undefined
+}
+
 function optionalBoolArg(args: Record<string, unknown>, ...keys: string[]): boolean | undefined {
   for (const key of keys) {
     const value = args[key]
@@ -357,7 +385,8 @@ export async function runGeneration(
     pitch: optionalNumberArg(args, 'pitch'),
     audioFormat: optionalEnumStringArg(args, ['mp3', 'wav', 'flac', 'pcm'] as const, 'audioFormat', 'audio_format'),
     instruction: optionalStringArg(args, 'instruction'),
-    audioTask: typeof args.task === 'string' ? (args.task as 'tts' | 'music' | 'clone') : undefined,
+    // task 枚举校验：非法值直接抛错，避免自定义配置下静默落到 TTS 分支（用错误模型请求 TTS）。
+    audioTask: requireEnumArg(args, ['tts', 'music', 'clone'] as const, 'task', 'task'),
     voice: optionalStringArg(args, 'voice'),
     lyrics: optionalStringArg(args, 'lyrics'),
     instrumental: optionalBoolArg(args, 'instrumental', 'isInstrumental'),
@@ -372,9 +401,10 @@ export async function runGeneration(
     signal: ctx.signal,
   })
 
-  // 仅图像走数量裁剪
+  // 仅图像走数量裁剪。显式 numberOfImages 优先；未显式指定时传 undefined，
+  // 让引擎回退到从 prompt 解析数量词（如"生成 4 张图"），否则多图会被静默裁成 1 张。
   const selected = modality === 'image'
-    ? selectGeneratedImagesForImageRequest(generated, { userMessage: prompt, defaultCount: typeof args.numberOfImages === 'number' ? args.numberOfImages : 1 })
+    ? selectGeneratedImagesForImageRequest(generated, { userMessage: prompt, defaultCount: typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined })
     : generated
 
   const modalityLabel = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'

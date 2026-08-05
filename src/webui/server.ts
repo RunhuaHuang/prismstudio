@@ -226,9 +226,10 @@ function validateIncomingApiRequest(req: IncomingMessage, method: string): strin
   })
 }
 
-/** 对配置做脱敏（隐藏 apiKey 中间部分） */
-function maskApiKey(key: string): string {
-  if (!key) return ''
+/** 对配置做脱敏（隐藏 apiKey 中间部分）。非字符串（坏数据）不抛错，返回空。 */
+export function maskApiKey(key: string): string {
+  // 类型守卫：坏数据（如数字）落盘后若没有守卫，GET /api/config 会永久 500。
+  if (typeof key !== 'string' || !key) return ''
   try {
     const parsed = JSON.parse(key)
     if (parsed && typeof parsed === 'object') {
@@ -282,7 +283,22 @@ async function handleApi(
   // PUT /api/config
   if (method === 'PUT' && url === '/api/config') {
     try {
-      const body = (await readJsonBody(req)) as DuoConfig
+      const raw = await readJsonBody(req)
+      // 校验 body 形状：必须是普通对象，模态字段必须是对象。
+      // 否则 `[]`/`"string"`/`{image:null}` 等错误体会被写盘清空/破坏 config.json（明文 Key 永久丢失）。
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        sendJson(res, 400, { error: '配置体必须是 JSON 对象' })
+        return true
+      }
+      for (const m of ['image', 'video', 'audio'] as const) {
+        const mod = (raw as Record<string, unknown>)[m]
+        if (mod === undefined) continue
+        if (typeof mod !== 'object' || mod === null || Array.isArray(mod)) {
+          sendJson(res, 400, { error: `${m} 配置必须是对象` })
+          return true
+        }
+      }
+      const body = raw as DuoConfig
       // 合并策略：前端可能回传脱敏的 apiKey（含 ****），此时保留原值
       const current = loadConfig()
       const merged = mergeConfigPreservingMaskedKeys(current, body)
@@ -364,6 +380,12 @@ export function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: Du
     }
     fixed.apiKeyByVendor = mergeMaskedStringMap(cur.apiKeyByVendor, inc.apiKeyByVendor)
     fixed.apiKeyByPreset = mergeMaskedStringMap(cur.apiKeyByPreset, inc.apiKeyByPreset)
+    // 顶层 apiKey 被清空时，同步删除该预设对应的 vendor/preset 记忆，避免"删掉的 key 复活"。
+    if (inc.apiKey === '' && inc.presetId) {
+      const vendorKey = vendorKeyForPreset(m, inc.presetId)
+      if (vendorKey && fixed.apiKeyByVendor) delete fixed.apiKeyByVendor[vendorKey]
+      if (fixed.apiKeyByPreset) delete fixed.apiKeyByPreset[inc.presetId]
+    }
     merged[m] = fixed
   }
   return merged
@@ -376,7 +398,9 @@ function mergeMaskedStringMap(
   if (!current && !incoming) return undefined
   const merged: Record<string, string> = { ...(current || {}) }
   for (const [key, value] of Object.entries(incoming || {})) {
-    if (!value.includes('****')) merged[key] = value
+    if (value.includes('****')) continue // 脱敏占位：保留磁盘原值
+    if (value === '') delete merged[key] // 空字符串：用户主动清除该记忆，删除磁盘条目
+    else merged[key] = value
   }
   return merged
 }

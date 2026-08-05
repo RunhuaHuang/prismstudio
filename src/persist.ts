@@ -54,6 +54,7 @@ export function extForMediaType(mediaType: string): string {
   if (lower.startsWith('video/')) {
     if (lower.includes('webm')) return '.webm'
     if (lower.includes('quicktime') || lower.includes('mov')) return '.mov'
+    if (lower.includes('matroska')) return '.mkv'
     return '.mp4'
   }
   if (lower.startsWith('audio/')) {
@@ -63,6 +64,7 @@ export function extForMediaType(mediaType: string): string {
     if (lower.includes('ogg')) return '.ogg'
     if (lower.includes('flac')) return '.flac'
     if (lower.includes('aac')) return '.aac'
+    if (lower.includes('opus')) return '.opus'
     return '.wav'
   }
   if (lower.startsWith('image/')) {

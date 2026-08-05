@@ -14,6 +14,7 @@ import {
   resolveDashscopeVideoVariant,
   readReferenceFiles,
   isPathWithinRoot,
+  selectGeneratedImagesForImageRequest,
 } from './media-generation-engine'
 import type { ResolvedMediaConfig } from './media-generation-engine'
 
@@ -1703,6 +1704,302 @@ describe('media-generation-engine · 视频', () => {
     expect(body.resolution).toBe('1080P')
   })
 
+  // ===== MiniMax H3（minimax-video-v2 协议族，全新 v2 接口） =====
+
+  test('H3 预设存在且使用 minimax-video-v2 协议族', () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'minimax-video-h3')!
+    expect(preset).toBeDefined()
+    expect(preset.model).toBe('MiniMax-H3')
+    expect(preset.protocol).toBe('minimax-video-v2')
+  })
+
+  test('H3 文生视频：路由到 /v2/video_generation，body 含必填 resolution+duration+ratio，从根级 task_id 提取', async () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'minimax-video-h3')!
+    const { fetchFn, calls } = makeSequencedFetch([
+      // 创建响应：task_id 在根级（非 task.id）
+      { ok: true, json: { task_id: 'h3-t1' } },
+      // 查询响应：任务嵌套在 task 下，succeeded
+      { ok: true, json: { task: { id: 'h3-t1', status: 'succeeded', content: { url: 'https://mm/h3.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '未来城市夜景', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ preset, modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3' }),
+      fetchFn,
+    })
+    expect(calls[0]!.url).toBe('https://api.minimax.io/v2/video_generation')
+    expect(calls[1]!.url).toBe('https://api.minimax.io/v2/query/video_generation/h3-t1')
+    const body = JSON.parse(calls[0]!.body!)
+    // 必填字段
+    expect(body.model).toBe('MiniMax-H3')
+    expect(body.resolution).toBe('2K') // 默认 2K
+    expect(body.duration).toBe(6) // 未传 duration 时默认 6
+    expect(body.ratio).toBe('16:9') // t2va 场景 ratio 必填（实测缺失会 400）
+    // content 必含 text item
+    expect(body.content).toEqual([{ type: 'text', text: '未来城市夜景' }])
+  })
+
+  test('H3 ratio 跟随用户指定 size/比例', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-ratio' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-ratio.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '竖版视频', apiKey: 'k', pollIntervalMs: 0, size: '9:16',
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.ratio).toBe('9:16')
+  })
+
+  test('H3 图生视频：参考图走 image_url + data:URI 嵌套结构', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'run-h3-i2v-'))
+    const ref = join(cwd, 'ref.png')
+    writeFileSync(ref, Buffer.from('fake-image'))
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-i2v' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-i2v.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '让这张图动起来', apiKey: 'k', pollIntervalMs: 0,
+      duration: 8, resolution: '768p', cwd,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      referencePaths: [ref],
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.duration).toBe(8)
+    expect(body.resolution).toBe('768P') // 小写 768p 归一为大写
+    // 官方规定图生视频 ratio 恒为 adaptive（由首帧图决定，传其他值会被忽略）。
+    expect(body.ratio).toBe('adaptive')
+    // image_url 类型 + 嵌套 url（data:URI），而非顶层 image 裸 base64
+    const imgItem = body.content.find((c: Record<string, unknown>) => c.type === 'image_url')
+    expect(imgItem).toBeDefined()
+    expect(imgItem.image_url.url).toMatch(/^data:image\/png;base64,/)
+    // 文本 item 仍在
+    expect(body.content.some((c: Record<string, unknown>) => c.type === 'text')).toBe(true)
+  })
+
+  test('H3 duration 超出 4~15 范围时被夹紧到合法区间', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-d' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-d.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      duration: 30, // 超出上限
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.duration).toBe(15) // 夹紧到 15
+  })
+
+  // 回归：H3 仅支持 768P/2K，传入不支持的分辨率（如 1080p）必须报错，
+  // 而非静默兜底到更贵的 2K 档（按量计费时会造成意外成本）。
+  test('H3 不支持的分辨率（1080p）显式报错而非静默兜底 2K', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'unused' } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      resolution: '1080p',
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })).rejects.toThrow(/不支持的分辨率/)
+  })
+
+  test('H3 失败状态抛出包含错误信息', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-fail' } },
+      { ok: true, json: { task: { status: 'failed', error: { message: 'content policy violation' } } } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })).rejects.toThrow('content policy violation')
+  })
+
+  // 回归：H3 轮询遇到未知/缺失状态应立即报错，而非静默空转到硬超时（与 DashScope 轮询约定一致）。
+  test('H3 轮询遇到未知任务状态立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-unknown' } },
+      { ok: true, json: { task: { status: 'weird-new-state' } } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })).rejects.toThrow(/未知任务状态/)
+  })
+
+  test('H3 轮询响应缺 task.status 时立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-nostatus' } },
+      { ok: true, json: { task: {} } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })).rejects.toThrow(/缺少 task.status/)
+  })
+
+  // 回归：H3 支持从 prompt 解析时长（与其他视频协议一致）。
+  test('H3 duration 从 prompt 解析（"8秒"）', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-pdur' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-pdur.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '生成一段8秒的宇宙穿梭视频', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.duration).toBe(8)
+  })
+
+  // 回归：H3 支持从 prompt 解析竖屏比例（与其他视频协议一致）。
+  test('H3 ratio 从 prompt 竖屏提示解析', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-pratio' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-pratio.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '竖屏短视频，适合手机', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.ratio).toBe('9:16')
+  })
+
+  test('H3 duration NaN 回退默认 6', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'h3-nan' } },
+      { ok: true, json: { task: { status: 'succeeded', content: { url: 'https://mm/h3-nan.mp4' } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
+      duration: Number.NaN,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.duration).toBe(6)
+  })
+
+  // ===== 万相 wan2.7-image-pro（DashScope multimodal-generation，4K 档） =====
+
+  test('wan2.7-image-pro 预设存在并走 dashscope-async 协议', () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'wanx-2-7-image-pro')!
+    expect(preset).toBeDefined()
+    expect(preset.model).toBe('wan2.7-image-pro')
+    expect(preset.protocol).toBe('dashscope-async')
+    expect(preset.supportsEdit).toBe(true)
+  })
+
+  test('wan2.7-image-pro 支持 4K 像素尺寸（不被限制在 1328 档）', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { output: { choices: [{ message: { content: [{ image: 'https://ds/img.png' }] } }] } } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    await generateMedia({
+      modality: 'image', prompt: '4K 海报', apiKey: 'k', size: '3840x2160',
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wan2.7-image-pro', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    // 4K 像素应透传（Pro 档 maxPixels=4096²），而非被压到 1328 档
+    expect(body.parameters.size).toBe('3840*2160')
+  })
+
+  test('wan2.7-image-pro 支持参考图（不再被 multimodal 参考图守卫拦截）', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'run-wan27-edit-'))
+    const ref = join(cwd, 'ref.png')
+    writeFileSync(ref, Buffer.from('fake-image'))
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { output: { choices: [{ message: { content: [{ image: 'https://ds/edit.png' }] } }] } } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    await generateMedia({
+      modality: 'image', prompt: '改成赛博朋克风', apiKey: 'k', isEdit: true, cwd,
+      referencePaths: [ref],
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wan2.7-image-pro', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    // 参考图应进入 content 的 image 项（data:URI），而非抛 "不支持参考图" 错误
+    expect(body.input.messages[0].content.some((c: Record<string, unknown>) => typeof c.image === 'string' && c.image.startsWith('data:image/'))).toBe(true)
+  })
+
+  // 回归：普通 wan2.7-image（非 Pro）也支持参考图（官方文档：图生图/编辑不限于 Pro）。
+  test('wan2.7-image（非 Pro）支持参考图', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'run-wan27-plain-edit-'))
+    const ref = join(cwd, 'ref.png')
+    writeFileSync(ref, Buffer.from('fake-image'))
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { output: { choices: [{ message: { content: [{ image: 'https://ds/edit2.png' }] } }] } } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    await generateMedia({
+      modality: 'image', prompt: '改成插画风', apiKey: 'k', isEdit: true, cwd,
+      referencePaths: [ref],
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wan2.7-image', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    expect(body.input.messages[0].content.some((c: Record<string, unknown>) => typeof c.image === 'string' && c.image.startsWith('data:image/'))).toBe(true)
+  })
+
+  // 回归：wan2.7-image-pro 的 4K 仅限文生图；编辑/图生图场景最高 2K。
+  test('wan2.7-image-pro 编辑场景 4K 被限制到 2K', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'run-wan27-pro-edit-'))
+    const ref = join(cwd, 'ref.png')
+    writeFileSync(ref, Buffer.from('fake-image'))
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { output: { choices: [{ message: { content: [{ image: 'https://ds/edit3.png' }] } }] } } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    await generateMedia({
+      modality: 'image', prompt: '改成 4K 海报', apiKey: 'k', isEdit: true, cwd, size: '3840x2160',
+      referencePaths: [ref],
+      config: makeImageConfig({ modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1', model: 'wan2.7-image-pro', preset: null }),
+      fetchFn,
+    })
+    const body = JSON.parse(calls[0]!.body!)
+    // 编辑场景下 4K（3840x2160）应被缩到 2K 上限（2048²），而非透传 4K
+    const size = body.parameters.size as string
+    const [w, h] = size.split('*').map(Number)
+    expect(w * h).toBeLessThanOrEqual(2048 * 2048)
+  })
+
+  // ===== MiniMax music-3.0 =====
+
+  test('music-3.0 预设存在并走 minimax 协议族 + music 任务', () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'minimax-music-3')!
+    expect(preset).toBeDefined()
+    expect(preset.model).toBe('music-3.0')
+    expect(preset.protocol).toBe('minimax')
+    expect(preset.audioTask).toBe('music')
+  })
+
+  test('Hailuo-2.3-Fast 预设存在并走 v1 video_generation 端点', () => {
+    const preset = MEDIA_MODEL_PRESETS.find((p) => p.id === 'minimax-video-hailuo-2.3-fast')!
+    expect(preset).toBeDefined()
+    expect(preset.model).toBe('MiniMax-Hailuo-2.3-Fast')
+    expect(preset.protocol).toBe('minimax')
+  })
+
   test('gemini-generate-content（Vertex JSON）：走 Vertex generateContent 并使用 OAuth header', async () => {
     mockGoogleTokenExchange('vertex-image-token')
     const { fetchFn, calls } = makeSequencedFetch([
@@ -3055,5 +3352,59 @@ describe('media-generation-engine · 会话缓存 LRU 淘汰', () => {
       for (const sid of sessions) clearMediaGenerationSessionHistory(sid)
       clearMediaGenerationSessionHistory('lru-newest')
     }
+  })
+})
+
+// ===== 图片数量裁剪（selectGeneratedImagesForImageRequest） =====
+
+describe('selectGeneratedImagesForImageRequest', () => {
+  const mk = (n: number) => Array.from({ length: n }, (_, i) => ({
+    mediaType: 'image/png',
+    data: `png-data-${i}`.repeat(20), // 确保足够长且互不相同
+  }))
+
+  test('未显式指定数量时，从 prompt 解析数量词', () => {
+    const selected = selectGeneratedImagesForImageRequest(mk(4), {
+      userMessage: '帮我生成三张海报',
+    })
+    expect(selected.length).toBe(3)
+  })
+
+  // 回归：显式 numberOfImages 不能被 prompt 里的自然语言数量词静默覆盖
+  test('显式 defaultCount 优先于 prompt 数量词', () => {
+    const selected = selectGeneratedImagesForImageRequest(mk(4), {
+      userMessage: '生成一张风景图，有山有水',
+      defaultCount: 4,
+    })
+    expect(selected.length).toBe(4)
+  })
+
+  test('prompt 无数量词且未显式指定时返回全部', () => {
+    const selected = selectGeneratedImagesForImageRequest(mk(3), {
+      userMessage: '画一只猫',
+    })
+    expect(selected.length).toBe(3)
+  })
+
+  test('超过 maxCount 时被限制', () => {
+    const selected = selectGeneratedImagesForImageRequest(mk(6), {
+      userMessage: '生成 10 张图',
+      maxCount: 4,
+    })
+    expect(selected.length).toBe(4)
+  })
+
+  test('空数组返回空', () => {
+    expect(selectGeneratedImagesForImageRequest([], { userMessage: 'x' })).toEqual([])
+  })
+
+  test('内容重复时去重', () => {
+    const imgs = [
+      { mediaType: 'image/png', data: 'same'.repeat(20) },
+      { mediaType: 'image/png', data: 'same'.repeat(20) },
+      { mediaType: 'image/png', data: 'diff'.repeat(20) },
+    ]
+    const selected = selectGeneratedImagesForImageRequest(imgs, { userMessage: '2 张' })
+    expect(selected.length).toBe(2) // 去重后 2 个不同
   })
 })

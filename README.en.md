@@ -4,7 +4,7 @@
 
 **A standalone multimodal generation MCP Server** — one command, let any AI agent generate images / video / audio
 
-`Image · Video · Audio` · `60 preset models` · `14 protocols` · `13 vendors` · `Built-in WebUI`
+`Image · Video · Audio` · `82 preset models` · `18 protocols` · `16 vendors` · `Built-in WebUI`
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node Version](https://img.shields.io/badge/node-%E2%89%A520-green.svg)](package.json)
@@ -33,7 +33,7 @@ It solves the "configuration is annoying" problem with a **built-in WebUI**: one
 
 ### Mainstream models — nearly all covered
 
-**60 preset models · 13 vendors**, China + international in one go:
+**82 preset models · 16 vendors**, China + international in one go:
 
 **🖼️ Image** · OpenAI gpt-image · Google Gemini (nano-banana) / Vertex · Doubao Seedream · Zhipu GLM-Image / CogView · Tongyi Qwen-Image · Wanxiang · Stability · Tencent Hunyuan · MiniMax · Midjourney
 
@@ -41,7 +41,7 @@ It solves the "configuration is annoying" problem with a **built-in WebUI**: one
 
 **🔊 Audio** · CosyVoice · Qwen3-TTS · Zhipu GLM-TTS · MiniMax speech/music · Voice cloning
 
-New model? Just add a preset — the engine auto-dispatches across 14 protocol families.
+New model? Just add a preset — the engine auto-dispatches across 18 protocol families.
 
 </td>
 <td width="50%" valign="top">
@@ -74,46 +74,47 @@ Zero-code wiring: the WebUI wizard copies a `mcpServers` JSON snippet in one cli
 
 ## Capabilities
 
-Prismstudio encapsulates each `modality × vendor` pair into one of 14 protocol families; the engine core dispatches to the right provider based on your config. **60 preset models** in total:
+Prismstudio encapsulates each `modality × vendor` pair into one of 18 protocol families; the engine core dispatches to the right provider based on your config. **82 preset models** in total:
 
-### Image generation (28 models · text-to-image · image-to-image · editing)
+### Image generation (41 models · text-to-image · image-to-image · editing)
 
 | Vendor | Models | Capabilities |
 |---|---|---|
 | OpenAI | gpt-image-1 / 2 | T2I, reference-image editing, transparent background |
 | Google Gemini | flash / flash-lite / pro (nano-banana) | T2I, multi-turn editing, aspect ratio & resolution |
 | Google Vertex | flash / flash-lite / pro | Same as Gemini, via Vertex AI quota |
-| Doubao | Seedream (4 / 4.5 / 5 / 5-Lite) | High-quality Chinese images; also available via Agent Plan (separate auth) |
+| Doubao | Seedream (3.0 / 4 / 4.5 / 5 / 5-Lite / 5-Pro) | High-quality Chinese images; also available via Agent Plan (separate auth) |
 | Zhipu | GLM-Image, CogView-4 | Chinese open-source ecosystem |
 | MiniMax | image-01 | Single-image generation |
 | Tongyi Wanxiang | Qwen-Image, Plus / Max / 2-Pro | Alibaba Cloud images |
-| Wanxiang | wanx-2.1-turbo / plus | Cost-effective |
+| Wanxiang | wanx2.1-turbo / plus, wan2.7-image / image-pro | 2.7-Pro supports 4K, multi-image reference, text rendering |
 | Stability | SDXL / SD3 / Ultra | Classic Stable Diffusion |
 | Tencent | Hunyuan image v3 / lite | Tencent Cloud images |
 | Midjourney | midjourney | Stylized generation |
 
-### Video generation (19 models · text-to-video · image-to-video · async)
+### Video generation (25 models · text-to-video · image-to-video · async)
 
 | Vendor | Models | Capabilities |
 |---|---|---|
 | Zhipu | CogVideoX 2 / 3 / Flash | Chinese open-source video |
-| Doubao | Seedance (1.5-pro / 2 / 2-fast / 2-mini) | ByteDance video; also available via Agent Plan (separate auth) |
+| Doubao | Seedance (1.0-pro / 1.5-pro / 2 / 2-fast / 2-mini) | ByteDance video; also available via Agent Plan (separate auth) |
 | Kling | Kling v2 | High-quality Chinese video |
-| MiniMax | video-01 | Video generation |
+| MiniMax | video-01, Hailuo-2.3 / 2.3-Fast, **H3** (flagship) | H3 supports 2K / 15s / native stereo sound |
 | Wanxiang | wan2.7-t2v, wan2.7-videoedit | T2V, video editing |
 | Tongyi | Qwen HappyHorse | Text/image/reference-to-video |
 | Tencent | Hunyuan video v1.5 | Tencent Cloud video |
 | Google Gemini | Veo 3.1 / 3.1-fast / 3.1-lite, Omni-flash | Top-tier international video, with audio |
 | Google Vertex | Omni-flash | Vertex quota |
 
-### Audio generation (13 models · TTS · music · voice clone)
+### Audio generation (16 models · TTS · music · voice clone)
 
 | Vendor | Models | Capabilities |
 |---|---|---|
 | Zhipu | GLM-TTS, GLM-TTS-Clone | Speech synthesis, voice cloning |
 | Alibaba | CosyVoice | Tongyi speech synthesis |
 | Tongyi | Qwen3-TTS (Flash / Instruct / dialects) | 30+ built-in voices, dialects |
-| MiniMax | speech-02 / async, music (incl. free / cover), voice-clone | TTS, music, voice cloning |
+| MiniMax | speech-02 / async, music-2.6 / **3.0** (incl. free / cover), voice-clone | TTS, music, voice cloning |
+| Doubao | Seed Audio 1.0, Seed TTS 2.0 (Agent Plan) | Volcengine speech synthesis |
 
 > Full preset IDs with their `protocol` / `baseUrl` / `vendor` are available in the `--webui` config dropdown.
 
@@ -373,7 +374,7 @@ More in [CONTRIBUTING.md](CONTRIBUTING.md).
 │  prismstudio (one process, one command)              │
 │                                                   │
 │  ┌────────────────────────────────────────────┐  │
-│  │  Engine core (14 protocol families, 60)     │  │
+│  │  Engine core (18 protocol families, 82)     │  │
 │  │  generateMedia() — single entry point       │  │
 │  └────────────────────────────────────────────┘  │
 │            ▲                       ▲              │

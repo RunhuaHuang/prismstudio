@@ -58,6 +58,7 @@ export type MediaProtocol =
   | 'kling-async'
   | 'zhipu-async'
   | 'minimax'
+  | 'minimax-video-v2'
   | 'minimax-tts-async'
   | 'minimax-voice-clone'
   | 'stability'
@@ -320,6 +321,21 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
   },
   {
+    // 万相 2.7 图像 Pro（2026 新版）：文生图 / 图生组图 / 图像编辑 / 多图参考生成，
+    // 支持 4K、12 种语言文字渲染、最多 3000 字符。走 DashScope multimodal-generation 接口。
+    id: 'wanx-2-7-image-pro', label: '万相 · wan2.7-image-pro', vendor: '万相',
+    modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    model: 'wan2.7-image-pro', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
+  },
+  {
+    // 万相 2.7 图像（速度更快档）。
+    id: 'wanx-2-7-image', label: '万相 · wan2.7-image', vendor: '万相',
+    modality: 'image', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    model: 'wan2.7-image', supportsEdit: true, defaultSize: '1:1',
+    helpUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
+  },
+  {
     id: 'stability-sdxl', label: 'Stability AI · SDXL', vendor: 'Stability',
     modality: 'image', protocol: 'stability', baseUrl: 'https://api.stability.ai/v2beta/stable-image/generate',
     model: 'sdxl', supportsEdit: false, defaultSize: '1:1',
@@ -444,6 +460,23 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
   },
   {
+    // MiniMax Hailuo-2.3-Fast：图生视频快速版，与 2.3 同走 v1 video_generation 端点。
+    id: 'minimax-video-hailuo-2.3-fast', label: 'MiniMax · Hailuo-2.3-Fast（海螺）', vendor: 'MiniMax',
+    modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1',
+    model: 'MiniMax-Hailuo-2.3-Fast', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+  },
+  {
+    // MiniMax H3（2026-07-31 发布）：当前旗舰，全模态输入（文/图/视频/音频），
+    // 原生 2K、最长 15s、立体声同步。命名从 "Hailuo" 切换到 "H3"。
+    // 走全新的 v2 端点（/v2/video_generation），请求体用 content 数组结构，
+    // 与 v1（/video_generation）不兼容，故单列协议族 minimax-video-v2。
+    id: 'minimax-video-h3', label: 'MiniMax · H3（海螺）', vendor: 'MiniMax',
+    modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2',
+    model: 'MiniMax-H3', supportsEdit: false, defaultSize: '16:9',
+    helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+  },
+  {
     id: 'wanx-2-7-t2v', label: '万相 · wan2.7（智能路由）', vendor: '万相',
     modality: 'video', protocol: 'dashscope-async', baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
     model: 'wan2.7-t2v', supportsEdit: false, defaultSize: '1280*720',
@@ -551,6 +584,14 @@ export const MEDIA_MODEL_PRESETS: MediaModelPreset[] = [
     id: 'minimax-music', label: 'MiniMax · music-2.6（音乐生成）', vendor: 'MiniMax',
     modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1',
     model: 'music-2.6', supportsEdit: false, defaultSize: '', audioTask: 'music',
+    helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+  },
+  {
+    // MiniMax Music-3.0：新一代音乐生成（官方模型文档列为当前最新音乐模型）。
+    // 仍走 /music_generation 同步接口，沿用 minimax 协议族与 music 任务路由。
+    id: 'minimax-music-3', label: 'MiniMax · music-3.0（音乐生成）', vendor: 'MiniMax',
+    modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimaxi.com/v1',
+    model: 'music-3.0', supportsEdit: false, defaultSize: '', audioTask: 'music',
     helpUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key',
   },
   {
@@ -1349,6 +1390,7 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
     if (protocol === 'zhipu-async') return callZhipuVideoApi(input, fetchFn, references)
     if (protocol === 'dashscope-async') return callDashscopeVideoApi(input, fetchFn, references)
     if (protocol === 'minimax') return callMinimaxVideoApi(input, fetchFn, references)
+    if (protocol === 'minimax-video-v2') return callMinimaxVideoV2Api(input, fetchFn, references)
     if (protocol === 'tencent-hunyuan-async') return callTencentHunyuanAsyncApi(input, fetchFn, references)
     if (protocol === 'google-interactions') return callGoogleInteractionsVideoApi(input, fetchFn, references)
     throw new Error(`视频不支持协议族: ${protocol}`)
@@ -1896,10 +1938,12 @@ async function callGeminiImageApi(
     }
   }
 
-  // 按请求张数裁剪（numberOfImages 仅在此生效，不转发 API）
+  // 按请求张数裁剪（numberOfImages 仅在此生效，不转发 API）。
+  // 未显式传 numberOfImages 时传 undefined，让引擎回退到从 prompt 解析数量词，
+  // 否则"生成 4 张图"这类 prompt 驱动的多图会被静默裁成 1 张。
   const selectedImages = selectGeneratedImagesForImageRequest(images, {
     userMessage: input.prompt,
-    defaultCount: input.numberOfImages ?? 1,
+    defaultCount: input.numberOfImages,
   })
   // Gemini 返回了文本/思考 parts 但没有任何 inlineData 图片（如 finishReason: NO_IMAGE），
   // 需显式报错——其他图像协议对"成功但零图"也视为失败。
@@ -1989,13 +2033,28 @@ function isDashscopeMultimodalImageModel(model: string): boolean {
     || /^z-image(?:$|-)/.test(model)
 }
 
-function formatDashscopeMultimodalImageSize(size: string, model: string): string {
+/** 万相 2.7 图像 Pro 支持 4K 直出，需更高像素上限；普通 wan2.7-image 仍走 2K 档。 */
+function isWan27ImageProModel(model: string): boolean {
+  return /^wan2\.7-image-pro(?:$|-)/i.test(model)
+}
+
+/** 万相 2.7 图像系列（wan2.7-image / wan2.7-image-pro）均支持文生图/图生图/编辑/多图参考。 */
+function isWan27ImageModel(model: string): boolean {
+  return /^wan2\.7-image(?:$|-)/i.test(model)
+}
+
+function formatDashscopeMultimodalImageSize(size: string, model: string, isEdit = false): string {
   const normalized = normalizeSizeText(size, 'image') ?? size.trim()
-  if (normalized === 'auto') return isQwenImage2Model(model) ? '2048*2048' : '1328*1328'
+  if (normalized === 'auto') {
+    if (isQwenImage2Model(model) || isWan27ImageProModel(model)) return '2048*2048'
+    return '1328*1328'
+  }
 
   const parsed = parseSize(normalized)
   const ratio = /^\d+\s*:\s*\d+$/.test(normalized) ? normalized.replace(/\s+/g, '') : (parsed ? undefined : sizeToAspectRatio(normalized))
-  if (isQwenImage2Model(model)) {
+  if (isQwenImage2Model(model) || isWan27ImageProModel(model)) {
+    // qwen-image-2.x 与 wan2.7-image-pro 均支持更高分辨率。
+    // wan2.7-image-pro 的 4K 仅限文生图场景；图生图/编辑/组图最高 2K（isEdit=true 时收紧）。
     const ratioMap: Record<string, string> = {
       '1:1': '2048*2048', '16:9': '2688*1536', '9:16': '1536*2688',
       '4:3': '2304*1728', '3:4': '1728*2304',
@@ -2003,8 +2062,8 @@ function formatDashscopeMultimodalImageSize(size: string, model: string): string
     if (ratio && ratioMap[ratio]) return ratioMap[ratio]
     if (!parsed) return '2048*2048'
     const pixels = parsed.w * parsed.h
+    const maxPixels = isWan27ImageProModel(model) && isEdit ? 2048 * 2048 : 4096 * 4096
     const minPixels = 512 * 512
-    const maxPixels = 2048 * 2048
     if (pixels >= minPixels && pixels <= maxPixels) return `${parsed.w}*${parsed.h}`
     const scaled = scaleSizeToPixelRange(parsed, minPixels, maxPixels)
     return `${scaled.w}*${scaled.h}`
@@ -2021,7 +2080,9 @@ function formatDashscopeMultimodalImageSize(size: string, model: string): string
 }
 
 function buildDashscopeMultimodalImageParameters(input: GenerateMediaInput, model: string): Record<string, unknown> {
-  const size = formatDashscopeMultimodalImageSize(resolveRequestedSize(input) || input.config.preset?.defaultSize || '1328*1328', model)
+  // 有参考图 = 图生图/编辑场景：wan2.7-image-pro 在此场景最高 2K（4K 仅文生图）。
+  const hasReferences = (input.referencePaths?.length ?? 0) > 0
+  const size = formatDashscopeMultimodalImageSize(resolveRequestedSize(input) || input.config.preset?.defaultSize || '1328*1328', model, hasReferences)
   const parameters: Record<string, unknown> = { size }
   const requestedN = input.numberOfImages ?? 1
   if (/^qwen-image-(?:max|plus)$/.test(model) && requestedN !== 1) {
@@ -2043,8 +2104,10 @@ async function callDashscopeMultimodalImageApi(
 ): Promise<GenerateMediaOutput> {
   const { baseUrl } = input.config
   if (!baseUrl) throw new Error('dashscope-async 缺少 baseUrl')
-  if (references.length > 0 && !isQwenImage2Model(model)) {
-    throw new Error(`${model} 当前生图链路不支持直接传参考图；请切换到支持编辑的 Qwen Image 编辑模型或移除 referenceImagePaths`)
+  // qwen-image-2.x 与 wan2.7-image 系列（含 pro）均支持参考图（图生图 / 编辑 / 多图参考）；
+  // 其余走 multimodal-generation 接口的模型暂不支持直接传参考图。
+  if (references.length > 0 && !isQwenImage2Model(model) && !isWan27ImageModel(model)) {
+    throw new Error(`${model} 当前生图链路不支持直接传参考图；请切换到支持编辑的模型或移除 referenceImagePaths`)
   }
   const submitUrl = `${baseUrl}/services/aigc/multimodal-generation/generation`
   const content: Array<Record<string, string>> = []
@@ -3191,6 +3254,170 @@ async function retrieveMinimaxFileDownloadUrl(
   return downloadUrl
 }
 
+// ===== 协议族：minimax-video-v2（MiniMax H3，/v2/video_generation 全新接口） =====
+//
+// H3（2026-07-31 发布）是 Hailuo-2.3 的继任者，命名从 "Hailuo" 切到 "H3"，且改用全新
+// v2 端点。请求/响应结构与 v1（/video_generation）不兼容（详见官方 API reference）：
+//   提交：POST /v2/video_generation
+//     body（resolution + duration 均为必填）：
+//       { model, content: [{ type:'text', text }, { type:'image_url', image_url:{url} }, ...],
+//         resolution: '768P'|'2K', duration: 4~15 }
+//     响应：{ task_id }  ← 注意 task_id 在根级，不是嵌套在 task 对象里
+//   查询：GET  /v2/query/video_generation/{task_id}
+//     响应：{ task: { id, status, content: { url } } }  ← 查询响应里任务才嵌套在 task 下
+//   status: queued / running / succeeded / failed / cancelled
+// content 媒体项遵循官方 schema：type 为 image_url/video_url/audio_url，base64 须包成
+// data:URI 放在嵌套的 {url} 字段（与 v1 /video_generation 的 first_frame_image 裸 base64 不同）。
+// 支持全模态输入（文/图/视频/音频）、原生 2K、最长 15s、立体声同步。
+
+interface MinimaxVideoV2Task {
+  id?: string
+  status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | string
+  content?: { url?: string }
+  error?: { message?: string }
+}
+
+/** 创建任务响应：task_id 在根级 */
+interface MinimaxVideoV2CreateResponse {
+  task_id?: string
+  base_resp?: { status_msg?: string }
+}
+
+/** 查询任务响应：任务嵌套在 task 下 */
+interface MinimaxVideoV2QueryResponse {
+  task?: MinimaxVideoV2Task
+}
+
+function buildMinimaxVideoV2Content(
+  prompt: string,
+  references: ReferenceFile[],
+): Array<Record<string, unknown>> {
+  const content: Array<Record<string, unknown>> = []
+  for (const ref of references) {
+    // 官方约定 base64 走 data:URI，放在嵌套 {url} 字段。
+    const dataUri = `data:${ref.mediaType};base64,${ref.base64}`
+    if (ref.mediaType.startsWith('image/')) {
+      content.push({ type: 'image_url', image_url: { url: dataUri } })
+    } else if (ref.mediaType.startsWith('video/')) {
+      content.push({ type: 'video_url', video_url: { url: dataUri } })
+    } else if (ref.mediaType.startsWith('audio/')) {
+      content.push({ type: 'audio_url', audio_url: { url: dataUri } })
+    }
+  }
+  // 每个请求必须至少包含一个非空 text item。
+  content.push({ type: 'text', text: prompt })
+  return content
+}
+
+/**
+ * 把 768p/2k 等自然值归一为 H3 支持的分辨率档（768P / 2K）。
+ * H3 官方仅支持这两档；无法识别的值必须报错，而非静默兜底（避免按量计费时
+ * 意外落到更贵的 2K 档）。未传值时默认 2K（H3 旗舰档）。
+ */
+function resolveMinimaxH3Resolution(value?: string): '768P' | '2K' {
+  const text = value?.trim().toLowerCase()
+  if (!text) return '2K' // 未传时默认 2K（H3 旗舰档）
+  if (/^(?:2k|2560|1440p|uhd)$/.test(text)) return '2K'
+  if (/^(?:768p|720p|hd)$/.test(text)) return '768P'
+  throw new Error(
+    `MiniMax H3 不支持的分辨率: ${value}。H3 仅支持 768P 或 2K，` +
+    `请把 resolution 设为 768p 或 2k（也可省略，默认 2K）。`,
+  )
+}
+
+/**
+ * H3 的 ratio 按场景区分（官方 video-generation-v2-create 文档）：
+ *  - 文生视频（t2va，纯文本）：ratio 必填且不能为 adaptive（否则 API 400，错误 2013），
+ *    必须显式指定 16:9/4:3/1:1/3:4/9:16/21:9 之一。从 size/aspectRatio/prompt/
+ *    预设 defaultSize 推导，兜底 16:9。
+ *  - 图生视频（i2va，content 含图片）：官方规定 ratio 恒为 adaptive（由首帧图决定，
+ *    传其他值会被忽略）。故此处直接返回 adaptive，不再强行推导。
+ */
+function resolveMinimaxH3Ratio(input: GenerateMediaInput, hasImage: boolean): string {
+  if (hasImage) return 'adaptive' // i2v：由首帧图决定比例，API 会忽略其他值
+  const requested = input.size?.trim()
+    || input.aspectRatio?.trim()
+    || resolveRequestedSize({ size: input.size, prompt: input.prompt, modality: 'video' })
+    || input.config.preset?.defaultSize?.trim()
+  const ratio = sizeToAspectRatio(requested)
+  return ratio ?? '16:9' // t2v：必须显式比例，兜底 16:9
+}
+
+/** H3 duration 支持 4~15 秒整数；未传时从 prompt 解析，再兜底 6。NaN/非有限值回退 6。 */
+function resolveMinimaxH3Duration(input: GenerateMediaInput): number {
+  const raw = input.duration !== undefined ? input.duration : parseDurationSecondsFromText(input.prompt)
+  const value = typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : 6
+  return Math.max(4, Math.min(15, value))
+}
+
+async function callMinimaxVideoV2Api(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+): Promise<GenerateMediaOutput> {
+  const { baseUrl, model } = input.config
+  if (!baseUrl) throw new Error('minimax-video-v2 缺少 baseUrl')
+  const content = buildMinimaxVideoV2Content(input.prompt, references)
+  // 是否图生视频（content 含图片）：决定 ratio 取 adaptive 还是显式比例。
+  const hasImage = references.some((r) => r.mediaType.startsWith('image/'))
+  // resolution / duration / ratio 均为官方必填字段。
+  // resolution 只从专门的 resolution 参数取，不回退 size——size 可能是比例(9:16)
+  // 而非分辨率(2K/768p)，混用会在严格校验下误判为不支持的分辨率。
+  const resolution = resolveMinimaxH3Resolution(input.resolution)
+  const duration = resolveMinimaxH3Duration(input)
+  const ratio = resolveMinimaxH3Ratio(input, hasImage)
+  const body: Record<string, unknown> = { model, content, resolution, duration, ratio }
+  if (input.promptEnhance !== undefined) body.prompt_optimizer = input.promptEnhance
+  if (input.watermark !== undefined) body.aigc_watermark = input.watermark
+
+  const submitRes = await fetchFn(`${baseUrl}/video_generation`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: input.signal,
+  })
+  if (!submitRes.ok) {
+    const text = await submitRes.text().catch(() => '')
+    throw new Error(`MiniMax H3 视频提交失败 (${submitRes.status}): ${text.slice(0, 300)}`)
+  }
+  // 创建响应：task_id 在根级（不是 task.id）。
+  const submitBody = (await safeParseJson(submitRes, 'MiniMax H3 视频')) as MinimaxVideoV2CreateResponse
+  const taskId = submitBody.task_id
+  if (!taskId) throw new Error(`MiniMax H3 视频未返回 task_id: ${submitBody.base_resp?.status_msg ?? '未知错误'}`)
+
+  const deadline = Date.now() + VIDEO_POLL_TIMEOUT_MS
+  for (;;) {
+    if (Date.now() > deadline) throw new Error(`MiniMax H3 视频轮询超时: ${taskId}`)
+    if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
+    const res = await fetchFn(`${baseUrl}/query/video_generation/${encodeURIComponent(taskId)}`, {
+      method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` }, signal: input.signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`MiniMax H3 视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
+    }
+    // 查询响应：任务嵌套在 task 下。
+    const queryBody = (await safeParseJson(res, 'MiniMax H3 视频查询')) as MinimaxVideoV2QueryResponse
+    const status = queryBody.task?.status
+    if (status === 'succeeded') {
+      const videoUrl = queryBody.task?.content?.url
+      if (!videoUrl) throw new Error('MiniMax H3 视频成功但未返回 URL')
+      return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
+    }
+    if (status === 'failed' || status === 'cancelled') {
+      throw new Error(`MiniMax H3 视频失败: ${queryBody.task?.error?.message ?? status}`)
+    }
+    // 未知/缺失状态不应静默轮询到硬超时：与 DashScope 轮询器约定一致，暴露协议变化。
+    if (!status) {
+      throw new Error(`MiniMax H3 视频查询缺少 task.status: task_id=${taskId}`)
+    }
+    if (status !== 'queued' && status !== 'running') {
+      throw new Error(`MiniMax H3 视频返回未知任务状态 (${status}): task_id=${taskId}`)
+    }
+    // queued / running 继续轮询
+  }
+}
+
 const MINIMAX_TTS_VOICE_ALIASES: Record<string, string> = {
   'male-qn-qingse': 'male-qn-qingse',
   'male-qn-jingying': 'male-qn-jingying',
@@ -4320,7 +4547,8 @@ export function dedupeGeneratedImages(images: GeneratedImageData[]): GeneratedIm
 
 /**
  * 按用户请求的张数裁剪生成结果。
- * 去重后，若消息里能解析出张数则按张数裁剪（上限 maxCount），否则返回全部。
+ * 显式 defaultCount（如 MCP 参数 numberOfImages）优先；未显式指定时才从 userMessage
+ * 解析数量词（如"生成 4 张图"）。避免显式参数被 prompt 里的自然语言数量词静默覆盖。
  */
 export function selectGeneratedImagesForImageRequest(
   images: GeneratedImageData[],
@@ -4333,7 +4561,7 @@ export function selectGeneratedImagesForImageRequest(
   const uniqueImages = dedupeGeneratedImages(images)
   if (uniqueImages.length === 0) return []
   const maxCount = Math.max(1, Math.floor(args.maxCount ?? 4))
-  const requestedCount = resolveRequestedImageCount(args.userMessage) ?? args.defaultCount
+  const requestedCount = args.defaultCount !== undefined ? args.defaultCount : resolveRequestedImageCount(args.userMessage)
   if (!requestedCount) return uniqueImages
   const limit = Math.min(Math.max(Math.round(requestedCount), 1), maxCount)
   return uniqueImages.slice(0, limit)

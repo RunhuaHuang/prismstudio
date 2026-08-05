@@ -4,7 +4,7 @@
 
 **独立多模态生成 MCP Server** —— 一条命令，让任意 AI agent 生成图像 / 视频 / 音频
 
-`图像 · 视频 · 音频` · `60 个预置模型` · `14 种协议` · `13 家厂商` · `内嵌 WebUI`
+`图像 · 视频 · 音频` · `82 个预置模型` · `18 种协议` · `16 家厂商` · `内嵌 WebUI`
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node Version](https://img.shields.io/badge/node-%E2%89%A520-green.svg)](package.json)
@@ -33,7 +33,7 @@ Prismstudio 是一个遵循 [Model Context Protocol](https://modelcontextprotoco
 
 ### 市面上主流模型，几乎全覆盖
 
-**60 个预置模型 · 13 家厂商**，国内外一次接齐：
+**82 个预置模型 · 16 家厂商**，国内外一次接齐：
 
 **🖼️ 图像** · OpenAI gpt-image · Google Gemini(nano-banana)/Vertex · 豆包 Seedream · 智谱 GLM-Image/CogView · 通义 Qwen-Image · 万相 · Stability · 腾讯混元 · MiniMax · Midjourney
 
@@ -41,7 +41,7 @@ Prismstudio 是一个遵循 [Model Context Protocol](https://modelcontextprotoco
 
 **🔊 音频** · CosyVoice · Qwen3-TTS · 智谱 GLM-TTS · MiniMax speech/music · 声音克隆
 
-新模型？加一条预设即可，引擎自动分派 14 种协议族。
+新模型？加一条预设即可，引擎自动分派 18 种协议族。
 
 </td>
 <td width="50%" valign="top">
@@ -74,46 +74,47 @@ Prismstudio 是一个遵循 [Model Context Protocol](https://modelcontextprotoco
 
 ## 能力总览
 
-Prismstudio 把「模态 × 厂商」封装成 14 种协议族，引擎内核按配置自动分派到对应 provider。当前共 **60 个预置模型**：
+Prismstudio 把「模态 × 厂商」封装成 18 种协议族，引擎内核按配置自动分派到对应 provider。当前共 **82 个预置模型**：
 
-### 图像生成（28 个模型 / 文生图 · 图生图 · 编辑）
+### 图像生成（41 个模型 / 文生图 · 图生图 · 编辑）
 
 | 厂商 | 模型 | 能力 |
 |---|---|---|
 | OpenAI | gpt-image-1 / 2 | 文生图、参考图编辑、透明背景 |
 | Google Gemini | flash / flash-lite / pro（nano-banana） | 文生图、多轮编辑、宽高比与分辨率 |
 | Google Vertex | flash / flash-lite / pro | Gemini 同款，走 Vertex AI 配额 |
-| 豆包 | Seedream（含 4 / 4.5 / 5 / 5-Lite） | 高质量国产图像；另有 Agent Plan 接入（独立鉴权） |
+| 豆包 | Seedream（含 3.0 / 4 / 4.5 / 5 / 5-Lite / 5-Pro） | 高质量国产图像；另有 Agent Plan 接入（独立鉴权） |
 | 智谱 | GLM-Image、CogView-4 | 国产开源生态 |
 | MiniMax | image-01 | 单图生成 |
 | 通义万相 | Qwen-Image、Plus / Max / 2-Pro | 阿里云图像 |
-| 万相 | wanx-2.1-turbo / plus | 高性价比 |
+| 万相 | wanx2.1-turbo / plus、wan2.7-image / image-pro | 2.7-Pro 支持 4K、多图参考、文字渲染 |
 | Stability | SDXL / SD3 / Ultra | 经典 Stable Diffusion |
 | 腾讯 | 混元 image v3 / lite | 腾讯云图像 |
 | Midjourney | midjourney | 风格化生成 |
 
-### 视频生成（19 个模型 / 文生视频 · 图生视频 · 异步）
+### 视频生成（25 个模型 / 文生视频 · 图生视频 · 异步）
 
 | 厂商 | 模型 | 能力 |
 |---|---|---|
 | 智谱 | CogVideoX 2 / 3 / Flash | 国产开源视频 |
-| 豆包 | Seedance（含 1.5-pro / 2 / 2-fast / 2-mini） | 字节视频；另有 Agent Plan 接入（独立鉴权） |
+| 豆包 | Seedance（含 1.0-pro / 1.5-pro / 2 / 2-fast / 2-mini） | 字节视频；另有 Agent Plan 接入（独立鉴权） |
 | 可灵 | Kling v2 | 高质量国产视频 |
-| MiniMax | video-01 | 视频生成 |
+| MiniMax | video-01、Hailuo-2.3 / 2.3-Fast、**H3**（旗舰） | H3 支持 2K / 15s / 原生立体声 |
 | 万相 | wan2.7-t2v、wan2.7-videoedit | 文生视频、视频编辑 |
 | 通义 | Qwen HappyHorse | 文/图/参考生视频 |
 | 腾讯 | 混元 video v1.5 | 腾讯云视频 |
 | Google Gemini | Veo 3.1 / 3.1-fast / 3.1-lite、Omni-flash | 国际顶级视频，支持音频 |
 | Google Vertex | Omni-flash | Vertex 配额 |
 
-### 音频生成（13 个模型 / TTS · 音乐 · 声音克隆）
+### 音频生成（16 个模型 / TTS · 音乐 · 声音克隆）
 
 | 厂商 | 模型 | 能力 |
 |---|---|---|
 | 智谱 | GLM-TTS、GLM-TTS-Clone | 语音合成、声音克隆 |
 | 阿里 | CosyVoice | 通义语音合成 |
 | 通义 | Qwen3-TTS（Flash / Instruct / 多方言） | 30+ 内置音色、方言 |
-| MiniMax | speech-02 / async、music（含免费档/翻唱）、voice-clone | TTS、音乐生成、声音克隆 |
+| MiniMax | speech-02 / async、music-2.6 / **3.0**（含免费档/翻唱）、voice-clone | TTS、音乐生成、声音克隆 |
+| 豆包 | Seed Audio 1.0、Seed TTS 2.0（Agent Plan） | 火山语音合成 |
 
 > 完整的预设 ID 与对应 `protocol`/`baseUrl`/`vendor` 见 [预设清单](#-配置文件说明) 或 `--webui` 配置台下拉。
 
@@ -373,7 +374,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 │  prismstudio（一个进程、一条命令）                     │
 │                                                   │
 │  ┌────────────────────────────────────────────┐  │
-│  │  引擎内核（14 协议族，60 预置模型）           │  │
+│  │  引擎内核（18 协议族，82 预置模型）           │  │
 │  │  generateMedia() 统一入口                    │  │
 │  └────────────────────────────────────────────┘  │
 │            ▲                       ▲              │
