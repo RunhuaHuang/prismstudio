@@ -15,9 +15,10 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import { WEBUI_HTML } from './index-html.js'
 import {
   loadConfig,
@@ -27,25 +28,49 @@ import {
   getModalityConfig,
   isModalityReady,
   toEngineCredentials,
+  collectConfigSecrets,
+  redactSensitiveText,
+  resolveGenerationPolicy,
+  resolveModalityApiKey,
+  normalizeConfig,
+  isSafeConfigMapKey,
+  isValidHttpBaseUrl,
   type DuoConfig,
   type MediaProtocol,
   type ModalityConfig,
 } from '../config.js'
 import {
   MEDIA_MODEL_PRESETS,
+  hasRegisteredMediaAdapter,
+  isMediaProtocol,
   getPresetsByModality,
   generateMedia,
+  selectGeneratedImagesForImageRequest,
   resolveMediaConfig,
   resolveEffectiveMediaCredentials,
   type MediaModality,
   type MediaModelPreset,
 } from '../engine/media-generation-engine.js'
 import { persistGenerated } from '../persist.js'
+import { writeGenerationDiagnostic, getDiagnosticsPath } from '../diagnostics.js'
+import { enforceGenerationPolicy } from '../policy.js'
 
 // ===== 工具函数 =====
 
 const require = createRequire(import.meta.url)
 let alpineScriptCache: string | null = null
+
+/** 固定资源 URL 必须允许重新验证，避免升级后继续使用旧版 Alpine.js。 */
+export const STATIC_ASSET_CACHE_CONTROL = 'no-cache'
+
+/** 统一解析 API 请求路径，路由只按完整 pathname 匹配，查询参数单独读取。 */
+export function parseApiRequestUrl(url: string): URL | null {
+  try {
+    return new URL(url, 'http://localhost')
+  } catch {
+    return null
+  }
+}
 
 const HTML_CSP = [
   "default-src 'none'",
@@ -65,6 +90,8 @@ export interface TestRequestBody {
   prompt: string
   /** 临时覆盖的 apiKey（不修改 config.json，仅本次试用） */
   apiKey?: string
+  /** 页面当前填写的环境变量名，用于自动保存完成前立即试用。 */
+  apiKeyEnv?: string
   /** 临时覆盖的 presetId（不修改 config.json） */
   presetId?: string
   /** 当前页面中的模型/协议/Base URL，避免自动保存 debounce 期间试用旧配置 */
@@ -73,6 +100,7 @@ export interface TestRequestBody {
   baseUrl?: string
   size?: string
   numberOfImages?: number
+  numberOfVideos?: number
   duration?: number
   voice?: string
   task?: 'tts' | 'music' | 'clone'
@@ -81,19 +109,43 @@ export interface TestRequestBody {
   outputDir?: string
 }
 
+function diagnosticSecretsForTestBody(body: TestRequestBody, effectiveApiKey?: string, prompt?: string): string[] {
+  const values: string[] = []
+  for (const value of [body.apiKey, effectiveApiKey, prompt, body.voice]) {
+    if (typeof value === 'string' && value.trim().length >= 4) values.push(value)
+  }
+  if (body.apiKeyEnv?.trim() && /^[A-Za-z_][A-Za-z0-9_]*$/.test(body.apiKeyEnv.trim())) {
+    const envValue = process.env[body.apiKeyEnv.trim()]
+    if (envValue?.trim()) values.push(envValue)
+  }
+  return values
+}
+
 /** 读取请求体（JSON） */
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolveReq, reject) => {
+    const maxBytes = 5 * 1024 * 1024
+    const contentLength = Number(req.headers['content-length'])
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      reject(new Error('请求体过大（>5MB）'))
+      req.destroy()
+      return
+    }
     const chunks: Buffer[] = []
+    let totalBytes = 0
+    let settled = false
     req.on('data', (c: Buffer) => {
+      if (settled) return
       chunks.push(c)
-      // 限制 5MB，防滥用
-      if (chunks.reduce((a, c) => a + c.length, 0) > 5 * 1024 * 1024) {
+      totalBytes += c.length
+      if (totalBytes > maxBytes) {
+        settled = true
         reject(new Error('请求体过大（>5MB）'))
         req.destroy()
       }
     })
     req.on('end', () => {
+      if (settled) return
       try {
         const raw = Buffer.concat(chunks).toString('utf-8')
         resolveReq(raw ? JSON.parse(raw) : {})
@@ -120,7 +172,7 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 /** 发送纯文本/脚本响应 */
 function sendText(res: ServerResponse, status: number, body: string, contentType: string): void {
   setCommonSecurityHeaders(res)
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+  res.setHeader('Cache-Control', STATIC_ASSET_CACHE_CONTROL)
   res.writeHead(status, {
     'Content-Type': contentType,
     'Content-Length': Buffer.byteLength(body),
@@ -205,8 +257,10 @@ export function validateLocalApiRequest(meta: ApiRequestMeta): string | null {
 
   const method = meta.method.toUpperCase()
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    const contentType = meta.contentType?.toLowerCase() ?? ''
-    if (!contentType.includes('application/json')) return '写入类 API 请求必须使用 application/json'
+    const mediaType = meta.contentType?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+    if (mediaType !== 'application/json' && !/^application\/[a-z0-9!#$&^_.+-]+\+json$/i.test(mediaType)) {
+      return '写入类 API 请求必须使用 application/json'
+    }
   }
 
   return null
@@ -274,44 +328,39 @@ async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
+  const parsedUrl = parseApiRequestUrl(url)
+  if (!parsedUrl) return false
+  const pathname = parsedUrl.pathname
+
   // GET /api/config
-  if (method === 'GET' && url === '/api/config') {
+  if (method === 'GET' && pathname === '/api/config') {
     sendJson(res, 200, sanitizeConfig(loadConfig()))
     return true
   }
 
   // PUT /api/config
-  if (method === 'PUT' && url === '/api/config') {
+  if (method === 'PUT' && pathname === '/api/config') {
     try {
       const raw = await readJsonBody(req)
-      // 校验 body 形状：必须是普通对象，模态字段必须是对象。
-      // 否则 `[]`/`"string"`/`{image:null}` 等错误体会被写盘清空/破坏 config.json（明文 Key 永久丢失）。
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-        sendJson(res, 400, { error: '配置体必须是 JSON 对象' })
+      const validationError = validateConfigPayload(raw)
+      if (validationError) {
+        sendJson(res, 400, { error: validationError })
         return true
       }
-      for (const m of ['image', 'video', 'audio'] as const) {
-        const mod = (raw as Record<string, unknown>)[m]
-        if (mod === undefined) continue
-        if (typeof mod !== 'object' || mod === null || Array.isArray(mod)) {
-          sendJson(res, 400, { error: `${m} 配置必须是对象` })
-          return true
-        }
-      }
-      const body = raw as DuoConfig
+      const body = normalizeConfig(raw)
       // 合并策略：前端可能回传脱敏的 apiKey（含 ****），此时保留原值
       const current = loadConfig()
       const merged = mergeConfigPreservingMaskedKeys(current, body)
       saveConfig(merged)
       sendJson(res, 200, { ok: true, config: sanitizeConfig(merged) })
     } catch (err) {
-      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+      sendJson(res, 400, { error: safeHttpErrorMessage(err, loadConfig()) })
     }
     return true
   }
 
   // GET /api/presets
-  if (method === 'GET' && url === '/api/presets') {
+  if (method === 'GET' && pathname === '/api/presets') {
     const grouped: Record<MediaModality, MediaModelPreset[]> = {
       image: getPresetsByModality('image'),
       video: getPresetsByModality('video'),
@@ -322,7 +371,7 @@ async function handleApi(
   }
 
   // GET /api/status
-  if (method === 'GET' && url === '/api/status') {
+  if (method === 'GET' && pathname === '/api/status') {
     const config = loadConfig()
     // 实际落盘目录 = 根目录（config.outputDir 或默认 configDir）+ generated-media 子目录，
     // 与 runGeneration 的 resolve(ctx.outputDir, 'generated-media') 保持一致。
@@ -335,31 +384,172 @@ async function handleApi(
         video: isModalityReady(config, 'video'),
         audio: isModalityReady(config, 'audio'),
       },
+      policy: resolveGenerationPolicy(config),
+      diagnostics: {
+        enabled: config.diagnostics?.enabled === true,
+        path: getDiagnosticsPath(config),
+      },
     })
     return true
   }
 
   // POST /api/test（试用台）
-  if (method === 'POST' && url === '/api/test') {
+  if (method === 'POST' && pathname === '/api/test') {
+    let submittedApiKey: string | undefined
+    let requestSecrets: string[] = []
+    // 客户端断开（关标签页/刷新）时中止上游轮询与下载，避免用户已离开却继续产生费用的付费请求。
+    const ac = new AbortController()
+    const onClientClose = () => ac.abort()
+    req.on('close', onClientClose)
     try {
-      const body = (await readJsonBody(req)) as TestRequestBody
-      const result = await runTestGeneration(body)
-      sendJson(res, 200, result)
+      const raw = await readJsonBody(req)
+      const validationError = validateTestRequestPayload(raw)
+      if (validationError) throw new Error(validationError)
+      const body = raw as TestRequestBody
+      submittedApiKey = typeof body.apiKey === 'string' ? body.apiKey : undefined
+      requestSecrets = diagnosticSecretsForTestBody(body, undefined, body.prompt)
+      const result = await runTestGeneration(body, ac.signal)
+      if (!ac.signal.aborted && !res.headersSent) sendJson(res, 200, result)
     } catch (err) {
-      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) })
+      // 客户端已断开时不再写入响应（接收方已不存在）；诊断日志已在 runTestGeneration 内记录。
+      if (!ac.signal.aborted && !res.headersSent) {
+        const rawMessage = err instanceof Error ? err.message : String(err)
+        const secrets = collectConfigSecrets(loadConfig())
+        secrets.push(...requestSecrets)
+        if (submittedApiKey) secrets.push(submittedApiKey)
+        sendJson(res, 400, { error: redactSensitiveText(rawMessage, secrets) })
+      }
+    } finally {
+      req.off('close', onClientClose)
     }
     return true
   }
 
   // GET /api/export?agent=claude
-  if (method === 'GET' && url.startsWith('/api/export')) {
-    const u = new URL(url, 'http://localhost')
-    const agent = u.searchParams.get('agent') || 'claude'
+  if (method === 'GET' && pathname === '/api/export') {
+    const agent = parsedUrl.searchParams.get('agent') || 'claude'
     sendJson(res, 200, exportAgentConfig(agent))
     return true
   }
 
   return false
+}
+
+export function validateConfigPayload(raw: unknown): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '配置体必须是 JSON 对象'
+  const root = raw as Record<string, unknown>
+  for (const m of ['image', 'video', 'audio'] as const) {
+    const value = root[m]
+    if (value === undefined) continue
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return `${m} 配置必须是对象`
+    const mod = value as Record<string, unknown>
+    if (mod.enabled !== undefined && typeof mod.enabled !== 'boolean') return `${m}.enabled 必须是布尔值`
+    for (const field of ['presetId', 'apiKey', 'apiKeyEnv', 'model', 'baseUrl', 'protocol', 'audioTask']) {
+      if (mod[field] !== undefined && typeof mod[field] !== 'string') return `${m}.${field} 必须是字符串`
+    }
+    if (typeof mod.baseUrl === 'string' && mod.baseUrl.trim() && !isValidHttpBaseUrl(mod.baseUrl)) {
+      return `${m}.baseUrl 必须是有效的 HTTPS 地址（本机回环代理可使用 HTTP）`
+    }
+    if (typeof mod.apiKeyEnv === 'string' && mod.apiKeyEnv.trim() && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(mod.apiKeyEnv.trim())) {
+      return `${m}.apiKeyEnv 必须是合法环境变量名`
+    }
+    if (typeof mod.protocol === 'string' && mod.protocol.trim() && !isMediaProtocol(mod.protocol.trim())) {
+      return `${m}.protocol 不是受支持的协议`
+    }
+    if (typeof mod.audioTask === 'string' && mod.audioTask.trim() && !['tts', 'music', 'clone'].includes(mod.audioTask.trim())) {
+      return `${m}.audioTask 必须是 tts / music / clone`
+    }
+    if (typeof mod.protocol === 'string' && isMediaProtocol(mod.protocol.trim())) {
+      const preset = typeof mod.presetId === 'string'
+        ? MEDIA_MODEL_PRESETS.find((item) => item.id === mod.presetId && item.modality === m)
+        : undefined
+      const task = m === 'audio'
+        ? ((typeof mod.audioTask === 'string' && ['tts', 'music', 'clone'].includes(mod.audioTask.trim())
+          ? mod.audioTask.trim()
+          : preset?.audioTask ?? 'tts') as 'tts' | 'music' | 'clone')
+        : 'tts'
+      if (!hasRegisteredMediaAdapter(m, mod.protocol.trim(), task)) {
+        return `${m}.protocol 与当前模态或音频任务不兼容`
+      }
+    }
+    for (const field of ['apiKeyByVendor', 'apiKeyByPreset']) {
+      const map = mod[field]
+      if (map === undefined) continue
+      if (typeof map !== 'object' || map === null || Array.isArray(map)) return `${m}.${field} 必须是对象`
+      if (Object.keys(map as Record<string, unknown>).some((key) => !isSafeConfigMapKey(key))) return `${m}.${field} 包含不安全的键名`
+      if (Object.values(map as Record<string, unknown>).some((item) => typeof item !== 'string')) return `${m}.${field} 的值必须是字符串`
+    }
+  }
+  if (root.outputDir !== undefined && typeof root.outputDir !== 'string') return 'outputDir 必须是字符串'
+  if (typeof root.outputDir === 'string' && root.outputDir.trim() && !isAbsolute(root.outputDir.trim())) return 'outputDir 必须是绝对路径'
+  if (root.policy !== undefined) {
+    if (typeof root.policy !== 'object' || root.policy === null || Array.isArray(root.policy)) return 'policy 必须是对象'
+    const policy = root.policy as Record<string, unknown>
+    for (const field of ['maxOutputs', 'maxVideoDurationSec', 'maxInlineMiB', 'maxInputMiB']) {
+      if (policy[field] !== undefined && typeof policy[field] !== 'number') return `policy.${field} 必须是数字`
+    }
+    if (policy.maxOutputs !== undefined && (!Number.isInteger(policy.maxOutputs) || Number(policy.maxOutputs) < 1 || Number(policy.maxOutputs) > 4)) return 'policy.maxOutputs 必须是 1-4 的整数'
+    if (policy.maxVideoDurationSec !== undefined && (!Number.isInteger(policy.maxVideoDurationSec) || Number(policy.maxVideoDurationSec) < 1 || Number(policy.maxVideoDurationSec) > 600)) return 'policy.maxVideoDurationSec 必须是 1-600 的整数'
+    if (policy.maxInlineMiB !== undefined && (!Number.isFinite(policy.maxInlineMiB) || Number(policy.maxInlineMiB) < 0 || Number(policy.maxInlineMiB) > 256)) return 'policy.maxInlineMiB 必须在 0-256 之间'
+    if (policy.maxInputMiB !== undefined && (!Number.isInteger(policy.maxInputMiB) || Number(policy.maxInputMiB) < 1 || Number(policy.maxInputMiB) > 2048)) return 'policy.maxInputMiB 必须是 1-2048 的整数'
+    if (policy.allow4k !== undefined && typeof policy.allow4k !== 'boolean') return 'policy.allow4k 必须是布尔值'
+    if (policy.allowedInputDirs !== undefined && (!Array.isArray(policy.allowedInputDirs) || policy.allowedInputDirs.some((item) => typeof item !== 'string'))) {
+      return 'policy.allowedInputDirs 必须是字符串数组'
+    }
+    if (Array.isArray(policy.allowedInputDirs) && policy.allowedInputDirs.some((item) => typeof item === 'string' && item.trim() && !isAbsolute(item.trim()))) {
+      return 'policy.allowedInputDirs 必须全部使用绝对路径'
+    }
+  }
+  if (root.diagnostics !== undefined) {
+    if (typeof root.diagnostics !== 'object' || root.diagnostics === null || Array.isArray(root.diagnostics)) return 'diagnostics 必须是对象'
+    const diagnostics = root.diagnostics as Record<string, unknown>
+    if (diagnostics.enabled !== undefined && typeof diagnostics.enabled !== 'boolean') return 'diagnostics.enabled 必须是布尔值'
+    if (diagnostics.logFile !== undefined && typeof diagnostics.logFile !== 'string') return 'diagnostics.logFile 必须是字符串'
+  }
+  return null
+}
+
+/** 统一清洗回传给浏览器的错误文本：脱敏密钥，并剥离本地绝对路径（含用户名/目录结构）。 */
+function safeHttpErrorMessage(err: unknown, config: DuoConfig): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return redactSensitiveText(raw, collectConfigSecrets(config))
+    .replace(/(^|[\s"'=(])\/(?:Users|home|private|var|tmp|etc|opt|Volumes|root|mnt|srv|media)\/[^\s"'<>,);]+/g, '$1[LOCAL_PATH]')
+    .slice(0, 1000)
+}
+
+export function validateTestRequestPayload(raw: unknown): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '试用请求必须是 JSON 对象'
+  const body = raw as Record<string, unknown>
+  if (!['image', 'video', 'audio'].includes(String(body.modality ?? ''))) return 'modality 必须是 image / video / audio 之一'
+  if (typeof body.prompt !== 'string' || !body.prompt.trim()) return 'prompt 不能为空'
+  for (const field of ['apiKey', 'apiKeyEnv', 'presetId', 'model', 'protocol', 'baseUrl', 'size', 'voice', 'outputDir']) {
+    if (body[field] !== undefined && typeof body[field] !== 'string') return `${field} 必须是字符串`
+  }
+  if (typeof body.apiKeyEnv === 'string' && body.apiKeyEnv.trim() && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(body.apiKeyEnv.trim())) {
+    return 'apiKeyEnv 必须是合法环境变量名'
+  }
+  if (typeof body.baseUrl === 'string' && body.baseUrl.trim() && !isValidHttpBaseUrl(body.baseUrl)) {
+    return 'baseUrl 必须是有效的 HTTPS 地址（本机回环代理可使用 HTTP）'
+  }
+  if (typeof body.protocol === 'string' && body.protocol.trim() && !isMediaProtocol(body.protocol.trim())) return 'protocol 不是受支持的协议'
+  if (body.numberOfImages !== undefined && (!Number.isInteger(body.numberOfImages) || Number(body.numberOfImages) < 1)) {
+    return 'numberOfImages 必须是正整数'
+  }
+  if (body.numberOfVideos !== undefined && (!Number.isInteger(body.numberOfVideos) || Number(body.numberOfVideos) < 1)) {
+    return 'numberOfVideos 必须是正整数'
+  }
+  if (body.modality === 'image' && body.numberOfVideos !== undefined) return '图像试用只接受 numberOfImages'
+  if (body.modality === 'video' && body.numberOfImages !== undefined) return '视频试用只接受 numberOfVideos'
+  if (body.duration !== undefined && (typeof body.duration !== 'number' || !Number.isFinite(body.duration) || body.duration < 0)) {
+    return 'duration 必须是非负有限数字'
+  }
+  if (body.task !== undefined && (typeof body.task !== 'string' || !['tts', 'music', 'clone'].includes(body.task))) {
+    return 'task 必须是 tts / music / clone'
+  }
+  if (body.referencePaths !== undefined && (!Array.isArray(body.referencePaths) || body.referencePaths.some((item) => typeof item !== 'string'))) {
+    return 'referencePaths 必须是字符串数组'
+  }
+  return null
 }
 
 /**
@@ -372,14 +562,23 @@ export function mergeConfigPreservingMaskedKeys(current: DuoConfig, incoming: Du
   for (const m of ['image', 'video', 'audio'] as const) {
     const inc = incoming[m]
     const cur = current[m]
-    if (!inc || !cur) continue
+    if (!inc) continue
     const fixed: ModalityConfig = { ...inc }
     // 顶层 apiKey：脱敏占位保留原值；否则用前端值（含空字符串=清空）
-    if (inc.apiKey?.includes('****')) {
-      fixed.apiKey = resolveMaskedStoredApiKey(m, cur, inc) || cur.apiKey || ''
+    if (cur && inc.apiKey?.includes('****')) {
+      const resolved = resolveMaskedStoredApiKey(m, cur, inc)
+      if (resolved) {
+        fixed.apiKey = resolved
+      } else {
+        // 目标 vendor/preset 没有记忆的真实 key：只有与当前顶层同属一个 vendor 时才回退到旧顶层值，
+        // 跨 vendor 切换时清空，避免把旧厂商的 key 错配到新厂商并用错误账户请求付费接口。
+        const targetVendor = vendorKeyForPreset(m, inc.presetId)
+        const currentVendor = vendorKeyForPreset(m, cur.presetId)
+        fixed.apiKey = targetVendor && currentVendor && targetVendor === currentVendor ? (cur.apiKey || '') : ''
+      }
     }
-    fixed.apiKeyByVendor = mergeMaskedStringMap(cur.apiKeyByVendor, inc.apiKeyByVendor)
-    fixed.apiKeyByPreset = mergeMaskedStringMap(cur.apiKeyByPreset, inc.apiKeyByPreset)
+    fixed.apiKeyByVendor = mergeMaskedStringMap(cur?.apiKeyByVendor, inc.apiKeyByVendor)
+    fixed.apiKeyByPreset = mergeMaskedStringMap(cur?.apiKeyByPreset, inc.apiKeyByPreset)
     // 顶层 apiKey 被清空时，同步删除该预设对应的 vendor/preset 记忆，避免"删掉的 key 复活"。
     if (inc.apiKey === '' && inc.presetId) {
       const vendorKey = vendorKeyForPreset(m, inc.presetId)
@@ -396,13 +595,16 @@ function mergeMaskedStringMap(
   incoming: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   if (!current && !incoming) return undefined
-  const merged: Record<string, string> = { ...(current || {}) }
+  const merged = new Map<string, string>(
+    Object.entries(current || {}).filter(([key, value]) => isSafeConfigMapKey(key) && typeof value === 'string'),
+  )
   for (const [key, value] of Object.entries(incoming || {})) {
+    if (!isSafeConfigMapKey(key)) continue
     if (value.includes('****')) continue // 脱敏占位：保留磁盘原值
-    if (value === '') delete merged[key] // 空字符串：用户主动清除该记忆，删除磁盘条目
-    else merged[key] = value
+    if (value === '') merged.delete(key) // 空字符串：用户主动清除该记忆，删除磁盘条目
+    else merged.set(key, value)
   }
-  return merged
+  return Object.fromEntries(merged)
 }
 
 function vendorKeyForPreset(modality: MediaModality, presetId: string | undefined): string {
@@ -450,52 +652,108 @@ interface TestResult {
   savedDir: string
 }
 
-async function runTestGeneration(body: TestRequestBody): Promise<TestResult> {
+/** 将试用台指定的 outputDir 收敛到配置根目录之下；越界或为空时落到默认 playground 子目录。 */
+function resolveWithinOutputRoot(rawDir: string | undefined, root: string): string {
+  const sub = rawDir?.trim()
+  if (!sub) return resolve(root, 'playground')
+  const candidate = isAbsolute(sub) ? resolve(sub) : resolve(root, sub)
+  const rel = relative(root, candidate)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? candidate : resolve(root, 'playground')
+}
+
+async function runTestGeneration(body: TestRequestBody, signal?: AbortSignal): Promise<TestResult> {
   const { modality } = body
   if (!modality || !['image', 'video', 'audio'].includes(modality)) {
     throw new Error('modality 必须是 image / video / audio 之一')
   }
 
   const config = loadConfig()
+  const policy = resolveGenerationPolicy(config)
   const credentials = resolveTestCredentials(body, config)
 
   const effective = resolveEffectiveMediaCredentials(credentials, modality)
   const resolved = resolveMediaConfig(effective, modality)
   if (!resolved) throw new Error('无法解析模型配置：请检查 presetId / model 是否正确')
-  if (!resolved.baseUrl.trim()) throw new Error('解析出的 baseUrl 为空，请检查 preset 或自定义 baseUrl')
+  if (!isValidHttpBaseUrl(resolved.baseUrl)) throw new Error('解析出的 baseUrl 无效，请检查 preset 或自定义 baseUrl')
+  const effectiveApiKey = effective.apiKey?.trim()
+  if (!effectiveApiKey) throw new Error('当前模型没有可用的 API Key')
 
   const prompt = body.prompt?.trim()
   if (!prompt) throw new Error('prompt 不能为空')
+  enforceGenerationPolicy(modality, {
+    numberOfImages: modality === 'image' ? body.numberOfImages : undefined,
+    numberOfVideos: modality === 'video' ? body.numberOfVideos : undefined,
+    duration: body.duration,
+    size: body.size,
+  }, prompt, policy, {
+    defaultSize: resolved.preset?.defaultSize,
+    defaultImageSize: resolved.preset?.defaultImageSize,
+  })
 
   // 试用产物落盘目录：用户在试用台指定的优先，否则落到与正式生成物一致的非隐藏目录
   // ~/prismstudio/playground/（getDefaultOutputDir 已与配置目录 ~/.prismstudio 分离）。
-  const playgroundDir = body.outputDir?.trim()
-    ? resolve(body.outputDir.trim())
-    : resolve(getDefaultOutputDir(), 'playground')
+  // 收敛到配置根目录之下：防止 outputDir 被设成宽路径（如 /、~/）从而成为隐式读根，
+  // 削弱 policy.allowedInputDirs 的边界（引擎会把 cwd 的 realpath 也当作合法读根）。
+  const outputRoot = resolve(config.outputDir?.trim() || getDefaultOutputDir())
+  const playgroundDir = resolveWithinOutputRoot(body.outputDir, outputRoot)
   mkdirSync(playgroundDir, { recursive: true })
 
-  const { images: generated } = await generateMedia({
-    modality,
-    prompt,
-    config: resolved,
-    apiKey: effective.apiKey,
-    size: body.size,
-    numberOfImages: body.numberOfImages,
-    duration: body.duration,
-    referencePaths: body.referencePaths,
-    voice: body.voice,
-    audioTask: body.task,
-    cwd: playgroundDir,
-  })
+  const requestId = randomUUID()
+  const startedAt = Date.now()
+  let generated
+  const referenceReadBudget = { remainingBytes: policy.maxInputBytes }
+  try {
+    const result = await generateMedia({
+      modality,
+      prompt,
+      config: resolved,
+      apiKey: effectiveApiKey,
+      size: body.size,
+      numberOfImages: modality === 'image' ? body.numberOfImages : undefined,
+      numberOfVideos: modality === 'video' ? body.numberOfVideos : undefined,
+      duration: body.duration,
+      referencePaths: body.referencePaths,
+      voice: body.voice,
+      audioTask: body.task,
+      cwd: playgroundDir,
+      allowedInputRoots: policy.allowedInputDirs,
+      maxInputBytes: policy.maxInputBytes,
+      referenceReadBudget,
+      signal,
+    })
+    generated = modality === 'image'
+      ? selectGeneratedImagesForImageRequest(result.images, {
+        userMessage: prompt,
+        defaultCount: body.numberOfImages,
+        maxCount: policy.maxOutputs,
+      })
+      : modality === 'video'
+        ? result.images.slice(0, policy.maxOutputs)
+        : result.images
+  } catch (err) {
+    writeGenerationDiagnostic(config, {
+      requestId, source: 'webui', outcome: 'error', modality,
+      protocol: resolved.protocol, vendor: resolved.preset?.vendor, model: resolved.model,
+      elapsedMs: Date.now() - startedAt,
+      error: err instanceof Error ? err.message : String(err),
+    }, diagnosticSecretsForTestBody(body, effectiveApiKey, prompt))
+    throw err
+  }
 
   const modalityLabel = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'
   const { items, content, savedPaths } = persistGenerated(generated, modalityLabel, {
     outputDir: resolve(playgroundDir, modality),
+    maxInlineBytes: policy.maxInlineBytes,
   })
+  writeGenerationDiagnostic(config, {
+    requestId, source: 'webui', outcome: 'success', modality,
+    protocol: resolved.protocol, vendor: resolved.preset?.vendor, model: resolved.model,
+    elapsedMs: Date.now() - startedAt, outputCount: generated.length,
+  }, diagnosticSecretsForTestBody(body, effectiveApiKey, prompt))
 
   const resultItems = items.map((item) => {
     // image / audio 直接给 dataUri 内联预览；video 体积大只给路径
-    if (item.mediaType.startsWith('image/') || item.mediaType.startsWith('audio/')) {
+    if (item.inlined && item.data && (item.mediaType.startsWith('image/') || item.mediaType.startsWith('audio/'))) {
       return {
         mediaType: item.mediaType,
         dataUri: `data:${item.mediaType};base64,${item.data}`,
@@ -527,9 +785,15 @@ export function resolveTestCredentials(body: TestRequestBody, config: DuoConfig)
   const storedForTarget = stored
     ? (stored.apiKeyByVendor?.[vendorKey]?.trim()
       || stored.apiKeyByPreset?.[presetId]?.trim()
-      || (samePreset ? stored.apiKey?.trim() : ''))
+      || (samePreset ? resolveModalityApiKey(stored) : ''))
     : ''
-  const apiKey = body.apiKey?.trim() || storedForTarget
+  const pageEnvName = body.apiKeyEnv?.trim()
+  const pageEnvKey = pageEnvName && /^[A-Za-z_][A-Za-z0-9_]*$/.test(pageEnvName)
+    ? process.env[pageEnvName]?.trim()
+    : ''
+  // 与正式 MCP 路径保持相同语义：任何已有的明文 key（含当前 vendor 的记忆 key）
+  // 都优先于 apiKeyEnv。否则页面试用会走环境变量、保存后的正式调用却仍走旧明文 key。
+  const apiKey = body.apiKey?.trim() || storedForTarget || pageEnvKey
   if (!apiKey) {
     throw new Error(`未配置 ${modality} 模态当前模型的 API Key，请先在配置页填写或在此处临时输入`)
   }
@@ -620,7 +884,7 @@ export function startWebuiServer(port: number): Promise<void> {
     const server = createServer(async (req, res) => {
       try {
         const method = req.method || 'GET'
-        const url = (req.url || '/').split('?')[0]
+        const url = (req.url || '/').split('?')[0] ?? '/'
         const fullUrl = req.url || '/'
 
         // WebUI 与 API 同源（均由本 server 托管于 127.0.0.1），不需要 CORS。
@@ -662,7 +926,7 @@ export function startWebuiServer(port: number): Promise<void> {
         sendJson(res, 404, { error: 'Not Found' })
       } catch (err) {
         if (!res.headersSent) {
-          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) })
+          sendJson(res, 500, { error: safeHttpErrorMessage(err, loadConfig()) })
         }
       }
     })

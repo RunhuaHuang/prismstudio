@@ -46,6 +46,30 @@ const GOOGLE_CLOUD_SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
 const DEFAULT_GOOGLE_TOKEN_URI = 'https://oauth2.googleapis.com/token'
 const googleTokenCache = new Map<string, { accessToken: string; expiresAtMs: number }>()
 
+const GOOGLE_TOKEN_HOSTS = new Set(['oauth2.googleapis.com', 'www.googleapis.com'])
+
+/**
+ * 校验凭据 JSON 中的 token_uri。
+ * OAuth token 交换会携带 JWT assertion、client secret 或 refresh token，
+ * 因此不能允许凭据文件把这些内容转发到任意 HTTP/本机地址。
+ */
+export function validateGoogleTokenUri(rawTokenUri?: string): string {
+  const value = rawTokenUri?.trim() || DEFAULT_GOOGLE_TOKEN_URI
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('Google OAuth token_uri 无效：必须是 Google 官方 HTTPS 地址')
+  }
+  if (url.protocol !== 'https:' || !GOOGLE_TOKEN_HOSTS.has(url.hostname.toLowerCase())) {
+    throw new Error('Google OAuth token_uri 不受信任：只允许 oauth2.googleapis.com 或 www.googleapis.com 的 HTTPS 地址')
+  }
+  if (url.username || url.password || url.port || url.search || url.hash) {
+    throw new Error('Google OAuth token_uri 不安全：禁止端口、用户名密码、query 或 hash')
+  }
+  return url.toString()
+}
+
 // ===== 工具函数 =====
 
 function expandPath(value: string): string {
@@ -97,10 +121,113 @@ function base64Url(input: string | Buffer): string {
 
 // ===== OAuth Token 交换 =====
 
-async function exchangeGoogleServiceAccountToken(serviceAccount: GoogleServiceAccountJson): Promise<string> {
+const inflightTokenRefreshes = new Map<string, Promise<string>>()
+
+function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  return err instanceof Error && err.name === 'AbortError'
+}
+
+function resolveExpiresInSeconds(expiresIn: unknown): number {
+  // 兼容 number 与字符串形式（部分网关返回 "3600"）；非有限/非正值回退 3600。
+  const asNumber = typeof expiresIn === 'number' ? expiresIn : Number(expiresIn)
+  return Number.isFinite(asNumber) && asNumber > 0 ? asNumber : 3600
+}
+
+/** 读取 token 端点响应：只吞 JSON 解析错误；AbortError 必须向上传播，否则用户取消会被误报为认证失败。 */
+async function readTokenResponse(response: Response, signal?: AbortSignal): Promise<{
+  access_token?: string
+  expires_in?: unknown
+  error?: unknown
+  error_description?: string
+}> {
+  try {
+    return await response.json() as { access_token?: string; expires_in?: unknown; error?: unknown; error_description?: string }
+  } catch (err) {
+    if (isAbortError(err, signal)) throw err
+    return {}
+  }
+}
+
+/** 执行一次 token 端点交换；对网络层错误与 5xx 瞬态错误重试一次。 */
+async function fetchGoogleToken(
+  tokenUri: string,
+  params: URLSearchParams,
+  signal: AbortSignal | undefined,
+  label: string,
+): Promise<{ accessToken: string; expiresAtMs: number }> {
+  let lastError: Error | undefined
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response
+    try {
+      response = await fetch(tokenUri, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: params,
+        signal,
+      })
+    } catch (err) {
+      // 用户主动取消必须立即传播，不重试。
+      if (isAbortError(err, signal)) throw err
+      // fetch 抛出的网络层错误（TypeError）首次短退避后重试一次。
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        lastError = err instanceof Error ? err : new Error(String(err))
+        continue
+      }
+      throw err
+    }
+    const data = await readTokenResponse(response, signal)
+    if (response.ok && data.access_token) {
+      return {
+        accessToken: data.access_token,
+        expiresAtMs: Date.now() + resolveExpiresInSeconds(data.expires_in) * 1000,
+      }
+    }
+    const desc = data.error_description ? ` (${data.error_description})` : ''
+    lastError = new Error(`${label}失败 (HTTP ${response.status}): ${JSON.stringify(data.error ?? data)}${desc}`)
+    // 5xx 是服务端瞬态错误，首次失败短退避后重试一次。
+    if (attempt === 0 && response.status >= 500 && response.status < 600) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      continue
+    }
+    throw lastError
+  }
+  throw lastError ?? new Error(`${label}失败`)
+}
+
+/**
+ * 并发刷新去重：缓存失效后若 N 个请求同时到达，只执行一次 token 交换，其余复用结果。
+ * 交换失败时清除陈旧缓存，避免持续命中坏值；in-flight 条目在完成后立即移除。
+ */
+async function dedupedTokenRefresh(
+  cacheKey: string,
+  refresh: () => Promise<{ accessToken: string; expiresAtMs: number }>,
+): Promise<string> {
+  const existing = inflightTokenRefreshes.get(cacheKey)
+  if (existing) return existing
+  const pending = (async () => {
+    try {
+      const result = await refresh()
+      googleTokenCache.set(cacheKey, result)
+      return result.accessToken
+    } catch (err) {
+      googleTokenCache.delete(cacheKey)
+      throw err
+    }
+  })()
+  inflightTokenRefreshes.set(cacheKey, pending)
+  try {
+    return await pending
+  } finally {
+    inflightTokenRefreshes.delete(cacheKey)
+  }
+}
+
+async function exchangeGoogleServiceAccountToken(serviceAccount: GoogleServiceAccountJson, signal?: AbortSignal): Promise<string> {
   const clientEmail = getString(serviceAccount.client_email)
   const privateKey = getString(serviceAccount.private_key)
-  const tokenUri = getString(serviceAccount.token_uri) ?? DEFAULT_GOOGLE_TOKEN_URI
+  const tokenUri = validateGoogleTokenUri(serviceAccount.token_uri)
   if (!clientEmail || !privateKey) {
     throw new Error('Vertex JSON 缺少 client_email 或 private_key')
   }
@@ -109,45 +236,33 @@ async function exchangeGoogleServiceAccountToken(serviceAccount: GoogleServiceAc
   const cached = googleTokenCache.get(cacheKey)
   if (cached && cached.expiresAtMs > Date.now() + 60_000) return cached.accessToken
 
-  const now = Math.floor(Date.now() / 1000)
-  const header = base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const claims = base64Url(JSON.stringify({
-    iss: clientEmail,
-    scope: GOOGLE_CLOUD_SCOPE,
-    aud: tokenUri,
-    iat: now,
-    exp: now + 3600,
-  }))
-  const unsignedJwt = `${header}.${claims}`
-  const signature = createSign('RSA-SHA256').update(unsignedJwt).sign(privateKey)
-  const assertion = `${unsignedJwt}.${base64Url(signature)}`
-
-  const response = await fetch(tokenUri, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion,
-    }),
+  return dedupedTokenRefresh(cacheKey, async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const header = base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+    const claims = base64Url(JSON.stringify({
+      iss: clientEmail,
+      scope: GOOGLE_CLOUD_SCOPE,
+      aud: tokenUri,
+      iat: now,
+      exp: now + 3600,
+    }))
+    const unsignedJwt = `${header}.${claims}`
+    const signature = createSign('RSA-SHA256').update(unsignedJwt).sign(privateKey)
+    const assertion = `${unsignedJwt}.${base64Url(signature)}`
+    return fetchGoogleToken(
+      tokenUri,
+      new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
+      signal,
+      'Vertex OAuth token 交换',
+    )
   })
-  const data = (await response.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: unknown }
-  if (!response.ok || !data.access_token) {
-    throw new Error(`Vertex OAuth token exchange failed: ${response.status} ${JSON.stringify(data.error ?? data)}`)
-  }
-
-  const expiresInSec = typeof data.expires_in === 'number' ? data.expires_in : 3600
-  googleTokenCache.set(cacheKey, {
-    accessToken: data.access_token,
-    expiresAtMs: Date.now() + expiresInSec * 1000,
-  })
-  return data.access_token
 }
 
-async function exchangeGoogleAuthorizedUserToken(credential: GoogleAuthorizedUserJson): Promise<string> {
+async function exchangeGoogleAuthorizedUserToken(credential: GoogleAuthorizedUserJson, signal?: AbortSignal): Promise<string> {
   const clientId = getString(credential.client_id)
   const clientSecret = getString(credential.client_secret)
   const refreshToken = getString(credential.refresh_token)
-  const tokenUri = getString(credential.token_uri) ?? DEFAULT_GOOGLE_TOKEN_URI
+  const tokenUri = validateGoogleTokenUri(credential.token_uri)
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error('Vertex authorized_user JSON 缺少 client_id、client_secret 或 refresh_token')
   }
@@ -156,27 +271,17 @@ async function exchangeGoogleAuthorizedUserToken(credential: GoogleAuthorizedUse
   const cached = googleTokenCache.get(cacheKey)
   if (cached && cached.expiresAtMs > Date.now() + 60_000) return cached.accessToken
 
-  const response = await fetch(tokenUri, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
+  return dedupedTokenRefresh(cacheKey, () => fetchGoogleToken(
+    tokenUri,
+    new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: clientId,
       client_secret: clientSecret,
       refresh_token: refreshToken,
     }),
-  })
-  const data = (await response.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: unknown }
-  if (!response.ok || !data.access_token) {
-    throw new Error(`Vertex OAuth refresh failed: ${response.status} ${JSON.stringify(data.error ?? data)}`)
-  }
-
-  const expiresInSec = typeof data.expires_in === 'number' ? data.expires_in : 3600
-  googleTokenCache.set(cacheKey, {
-    accessToken: data.access_token,
-    expiresAtMs: Date.now() + expiresInSec * 1000,
-  })
-  return data.access_token
+    signal,
+    'Vertex OAuth token 刷新',
+  ))
 }
 
 // ===== 凭据解析 =====
@@ -189,9 +294,17 @@ export function isGoogleVertexJsonCredential(rawCredential: string): boolean {
 }
 
 /** 解析凭据：JSON → OAuth token；纯字符串 → API Key */
-export async function resolveGoogleUpstreamAuth(rawCredential: string): Promise<GoogleUpstreamAuth> {
+export async function resolveGoogleUpstreamAuth(rawCredential: string, signal?: AbortSignal): Promise<GoogleUpstreamAuth> {
   const credential = readJsonCredential(rawCredential)
-  if (!credential) return { kind: 'api-key', apiKey: rawCredential.trim() }
+  if (!credential) {
+    // 形似文件路径却读取/解析失败时给出可操作的错误，而不是把路径当 API Key 发给 Google
+    // 拿到一个无意义的 400（如 "x-goog-api-key: /wrong/path/key.json"）。
+    const maybePath = rawCredential.trim().startsWith('file:') ? rawCredential.trim().slice('file:'.length) : rawCredential.trim()
+    if (maybePath.includes('/') || maybePath.endsWith('.json')) {
+      throw new Error(`Google 凭据文件不存在或无法解析为 JSON: ${maybePath}`)
+    }
+    return { kind: 'api-key', apiKey: rawCredential.trim() }
+  }
 
   const directApiKey =
     getString(credential.GOOGLE_API_KEY) ??
@@ -203,7 +316,7 @@ export async function resolveGoogleUpstreamAuth(rawCredential: string): Promise<
   if (credential.type === 'service_account') {
     return {
       kind: 'oauth',
-      accessToken: await exchangeGoogleServiceAccountToken(credential as GoogleServiceAccountJson),
+      accessToken: await exchangeGoogleServiceAccountToken(credential as GoogleServiceAccountJson, signal),
       projectId: getString(credential.project_id),
     }
   }
@@ -211,7 +324,7 @@ export async function resolveGoogleUpstreamAuth(rawCredential: string): Promise<
   if (credential.type === 'authorized_user') {
     return {
       kind: 'oauth',
-      accessToken: await exchangeGoogleAuthorizedUserToken(credential as GoogleAuthorizedUserJson),
+      accessToken: await exchangeGoogleAuthorizedUserToken(credential as GoogleAuthorizedUserJson, signal),
       projectId: getString(credential.quota_project_id),
     }
   }
@@ -223,10 +336,6 @@ export async function resolveGoogleUpstreamAuth(rawCredential: string): Promise<
 
 function isGoogleAiplatformHost(hostname: string): boolean {
   return hostname === 'aiplatform.googleapis.com' || /^[a-z0-9-]+-aiplatform\.googleapis\.com$/i.test(hostname)
-}
-
-function normalizeGoogleAiplatformModelGardenHost(hostname: string): string {
-  return hostname.toLowerCase() === 'global-aiplatform.googleapis.com' ? 'aiplatform.googleapis.com' : hostname
 }
 
 function stripKnownProviderEndpoint(pathname: string): string {
@@ -259,7 +368,7 @@ export function normalizeGoogleGeminiApiRoot(baseUrl?: string): string {
     url.hash = ''
     return url.toString().replace(/\/+$/, '')
   } catch {
-    return fallback
+    throw new Error(`Gemini Base URL 无效: ${baseUrl}`)
   }
 }
 
@@ -376,8 +485,9 @@ export async function buildGoogleGenerateContentRequestTarget(input: {
   rawCredential: string
   baseUrl?: string
   modelId: string
+  signal?: AbortSignal
 }): Promise<{ url: string; headers: Record<string, string>; authKind: GoogleUpstreamAuth['kind'] }> {
-  const auth = await resolveGoogleUpstreamAuth(input.rawCredential)
+  const auth = await resolveGoogleUpstreamAuth(input.rawCredential, input.signal)
   if (auth.kind === 'api-key') {
     const root = normalizeGoogleGeminiApiRoot(input.baseUrl)
     const url = new URL(`${root.replace(/\/+$/, '')}/v1beta/models/${encodeURIComponent(input.modelId)}:generateContent`)
@@ -402,8 +512,9 @@ export async function buildGooglePredictLongRunningRequestTarget(input: {
   rawCredential: string
   baseUrl?: string
   modelId: string
+  signal?: AbortSignal
 }): Promise<{ url: string; headers: Record<string, string>; authKind: GoogleUpstreamAuth['kind'] }> {
-  const auth = await resolveGoogleUpstreamAuth(input.rawCredential)
+  const auth = await resolveGoogleUpstreamAuth(input.rawCredential, input.signal)
   if (auth.kind === 'api-key') {
     const root = normalizeGoogleGeminiApiRoot(input.baseUrl)
     return {
@@ -424,8 +535,9 @@ export async function buildGooglePredictLongRunningRequestTarget(input: {
 export async function buildGoogleInteractionsRequestTarget(input: {
   rawCredential: string
   baseUrl?: string
+  signal?: AbortSignal
 }): Promise<{ url: string; headers: Record<string, string>; authKind: GoogleUpstreamAuth['kind'] }> {
-  const auth = await resolveGoogleUpstreamAuth(input.rawCredential)
+  const auth = await resolveGoogleUpstreamAuth(input.rawCredential, input.signal)
   if (auth.kind === 'api-key') {
     const root = normalizeGoogleGeminiApiRoot(input.baseUrl)
     const url = new URL(`${root.replace(/\/+$/, '')}/v1beta/interactions`)

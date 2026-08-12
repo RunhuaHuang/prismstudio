@@ -38,6 +38,7 @@ export const WEBUI_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Prismstudio · Multi-Modal Generation Console</title>
+<link rel="icon" href="data:," />
 <script defer src="/assets/alpine.min.js"></script>
 <script>
 // 防闪烁：Alpine 加载前先应用持久化的主题与语言（中文为默认）
@@ -372,6 +373,14 @@ textarea{resize:vertical;line-height:1.6}
 
 /* 全局输出目录 + 保存 */
 .master-section{margin-top:var(--space-lg);padding-top:var(--space-lg);border-top:1px dashed var(--line)}
+.policy-panel{margin-top:var(--space-lg);background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-lg);padding:var(--space-lg)}
+.policy-head{display:flex;justify-content:space-between;align-items:center;gap:var(--space-md);margin-bottom:var(--space-md)}
+.policy-title{font-family:var(--font-mono);font-size:var(--fs-mono-sm);font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--signal)}
+.policy-badge{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-muted);border:1px solid var(--line-bright);padding:3px 8px;border-radius:999px}
+.policy-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--space-md)}
+.policy-wide{grid-column:span 2}
+.policy-hint{font-family:var(--font-mono);font-size:var(--fs-mono-xs);color:var(--text-dim);line-height:1.5;margin-top:var(--space-xs)}
+.env-key{margin-top:var(--space-sm);padding-top:var(--space-sm);border-top:1px dashed var(--line)}
 .save-bar{display:flex;align-items:center;gap:var(--space-md);margin-top:var(--space-lg)}
 .save-msg{font-family:var(--font-mono);font-size:var(--fs-mono-sm)}
 .save-msg.ok{color:var(--signal)} .save-msg.err{color:var(--error)}
@@ -512,7 +521,10 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
 @media(max-width:640px){
   .wrap{padding:var(--space-lg) var(--space-md) var(--space-2xl)}
   .field-row{grid-template-columns:1fr}
+  .policy-grid{grid-template-columns:1fr}
+  .policy-wide{grid-column:auto}
 }
+@media(min-width:641px) and (max-width:980px){.policy-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
@@ -576,14 +588,14 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
   <section x-show="tab==='config'" class="fade-enter">
     <div class="channel-grid">
       <template x-for="m in modalities" :key="m.key">
-        <div class="channel" :class="config[m.key]?.enabled && config[m.key]?.apiKey && 'live'">
+        <div class="channel" :class="isReady(m.key) && 'live'">
           <div class="ch-head">
             <div class="ch-id">
               <span class="ch-led"></span>
               <span class="ch-no mono" x-text="'CH ' + m.no"></span>
               <span class="ch-name" x-text="m.name"></span>
             </div>
-            <span class="ch-status" x-text="(config[m.key]?.enabled && config[m.key]?.apiKey) ? t.statusLive : t.statusIdle"></span>
+            <span class="ch-status" x-text="isReady(m.key) ? t.statusLive : t.statusIdle"></span>
           </div>
 
           <div class="ch-field">
@@ -655,6 +667,11 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
                 <span style="font-size:var(--fs-mono-xs);color:var(--text-dim)" x-text="t.gcpJsonHelp"></span>
               </div>
             </template>
+            <div class="env-key">
+              <span class="label" x-text="t.labelApiKeyEnv"></span>
+              <input type="text" x-model="config[m.key].apiKeyEnv" :placeholder="t.phApiKeyEnv" spellcheck="false" />
+              <div class="policy-hint" x-text="t.apiKeyEnvHelp"></div>
+            </div>
           </div>
 
           <!-- Base URL：可编辑（所有模式统一）。预设带默认值作 placeholder，custom / Midjourney 由用户填写；下方实时展示拼接后的完整请求地址 -->
@@ -707,6 +724,49 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
         <span class="label" x-text="t.labelOutputDir"></span>
         <input type="text" x-model="config.outputDir" :placeholder="t.phOutputDir" />
       </div>
+      <div class="policy-panel">
+        <div class="policy-head">
+          <span class="policy-title" x-text="t.policyTitle"></span>
+          <span class="policy-badge" x-text="t.policyBadge"></span>
+        </div>
+        <div class="policy-grid">
+          <div class="ch-field" style="margin:0">
+            <span class="label" x-text="t.labelMaxOutputs"></span>
+            <input type="number" min="1" max="4" step="1" x-model.number="config.policy.maxOutputs" />
+          </div>
+          <div class="ch-field" style="margin:0">
+            <span class="label" x-text="t.labelMaxVideoDuration"></span>
+            <input type="number" min="1" max="600" step="1" x-model.number="config.policy.maxVideoDurationSec" />
+          </div>
+          <div class="ch-field" style="margin:0">
+            <span class="label" x-text="t.labelMaxInline"></span>
+            <input type="number" min="0" max="256" step="1" x-model.number="config.policy.maxInlineMiB" />
+          </div>
+          <div class="ch-field" style="margin:0">
+            <span class="label" x-text="t.labelMaxInput"></span>
+            <input type="number" min="1" max="2048" step="1" x-model.number="config.policy.maxInputMiB" />
+          </div>
+          <div class="ch-field" style="margin:0;display:flex;flex-direction:column;justify-content:flex-end">
+            <label class="toggle">
+              <input type="checkbox" x-model="config.policy.allow4k" />
+              <span class="toggle-track"></span><span class="toggle-label" x-text="t.labelAllow4k"></span>
+            </label>
+          </div>
+          <div class="ch-field policy-wide" style="margin:0">
+            <span class="label" x-text="t.labelAllowedInputs"></span>
+            <textarea rows="3" x-model="allowedInputDirsText" :placeholder="t.phAllowedInputs"></textarea>
+            <div class="policy-hint" x-text="t.allowedInputsHelp"></div>
+          </div>
+          <div class="ch-field policy-wide" style="margin:0">
+            <label class="toggle">
+              <input type="checkbox" x-model="config.diagnostics.enabled" />
+              <span class="toggle-track"></span><span class="toggle-label" x-text="t.labelDiagnostics"></span>
+            </label>
+            <input style="margin-top:var(--space-sm)" type="text" x-model="config.diagnostics.logFile" :placeholder="t.phDiagnosticsPath" />
+            <div class="policy-hint" x-text="t.diagnosticsHelp"></div>
+          </div>
+        </div>
+      </div>
       <div class="save-bar">
         <button class="btn btn-primary" @click="saveConfig()" :disabled="saving || !!loadError">
           <span x-show="!saving" x-text="t.btnCommit"></span>
@@ -741,6 +801,10 @@ html,body,input,select,textarea,.channel,.pg-panel,.pg-result,.patch-panel,.code
           <div x-show="test.modality==='image'">
             <span class="label" x-text="t.labelCount"></span>
             <input type="number" min="1" max="4" x-model.number="test.numberOfImages" />
+          </div>
+          <div x-show="test.modality==='video'">
+            <span class="label" x-text="t.labelCount"></span>
+            <input type="number" min="1" max="4" x-model.number="test.numberOfVideos" />
           </div>
           <div x-show="test.modality==='image'">
             <span class="label" x-text="t.labelSize"></span>
@@ -960,7 +1024,7 @@ const PROTOCOL_OPTIONS = {
 /**
  * 自建命令菜单下拉组件（替代原生 <select>，统一控制台美学）。
  *
- * 用法：x-data="dropdown({ getValue: ()=>当前值, getGroups: ()=>[...], placeholder })"
+ * 用法：x-data="dropdown({ getValue: ()=>当前值, getGroups: ()=>[...], getPlaceholder: ()=>文案 })"
  *   getGroups(): [{ label?(可选), items:[{value,label,tag?(可选),disabled?}] }]
  * value/groups 通过 getter 从父级响应式读取，语言切换/外部改动自动同步。
  * 触发选中：组件 $dispatch('select', {value}) 冒泡，外层 @select 监听。
@@ -971,13 +1035,14 @@ function dropdown(initial) {
   return {
     open: false,
     kbIndex: -1,
-    placeholder: initial.placeholder || '',
     _getValue: initial.getValue || (()=>''),
     _getGroups: initial.getGroups || (()=>[]),
+    _getPlaceholder: initial.getPlaceholder || (()=>initial.placeholder || ''),
 
     // 响应式：每次访问都从父级读最新值/分组
     get selectedVal() { return this._getValue() },
     get groups() { return this._getGroups() },
+    get placeholder() { return this._getPlaceholder() },
     get _flat() {
       const out = []
       for (const g of this.groups) for (const it of (g.items || [])) if (!it.disabled) out.push(it)
@@ -1050,6 +1115,7 @@ function prismApp() {
         phSelectModel: '请选择模型',
         customModel: '自定义（手动填写）',
         labelApiKey: 'API 密钥',
+        labelApiKeyEnv: '密钥环境变量', phApiKeyEnv: '如 OPENAI_API_KEY', apiKeyEnvHelp: '明文密钥为空时读取；变量名会保存，变量值不会写入配置文件。',
         showKey: '显示密钥', hideKey: '隐藏密钥',
         getApiKey: '获取 API Key',
         labelBaseUrl: 'Base URL',
@@ -1064,8 +1130,12 @@ function prismApp() {
         gcpJsonHelp: '选择后系统会读取 JSON 内容作为 API 凭证进行保存。',
         phKeyStored: '已保存 · 重新输入可覆盖', phKeyPaste: '在此粘贴密钥',
         phModel: '模型 ID',
-        labelOutputDir: '主输出目录',
-        phOutputDir: '留空 = ~/.prismstudio/generated-media',
+        labelOutputDir: '主输出根目录',
+        phOutputDir: '留空 = ~/prismstudio',
+        policyTitle: '◢ 运行策略', policyBadge: 'LOCAL GUARD',
+        labelMaxOutputs: '单次最大数量', labelMaxVideoDuration: '视频最长秒数', labelMaxInline: '内联上限（MiB）', labelMaxInput: '素材读取上限（MiB）', labelAllow4k: '允许 4K',
+        labelAllowedInputs: '额外素材目录', phAllowedInputs: '每行一个绝对目录', allowedInputsHelp: '仅这些目录与输出根目录中的参考素材可被读取并发送给模型。',
+        labelDiagnostics: '启用脱敏诊断日志', phDiagnosticsPath: '留空 = ~/.prismstudio/diagnostics.jsonl', diagnosticsHelp: '仅记录模型、协议、耗时和结果，不记录提示词、密钥或文件路径。',
         btnCommit: '▸ 提交配置', btnCommitting: '提交中…',
         committed: '✓ 已提交', commitFailed: '提交失败',
         autosaved: '✓ 已自动保存',
@@ -1079,7 +1149,7 @@ function prismApp() {
         labelVoice: '音色', phVoice: '如 Cherry',
         warnNotLive: '⚠ 通道未就绪 — 该模态尚未保存密钥。请到「通道」配置，或在下方临时填入密钥进行一次性测试。',
         labelTempKey: '临时密钥', tempKeyHint: '（一次性，不保存）', phTempKey: '留空 = 使用已保存密钥',
-        labelPlaygroundDir: '试用输出目录', phPlaygroundDir: '留空 = ~/.prismstudio/playground',
+        labelPlaygroundDir: '试用输出目录', phPlaygroundDir: '留空 = ~/prismstudio/playground',
         btnGenerate: '▸ 生成', btnGenerating: '生成中… 视频可能需要 1–5 分钟',
         generationFailed: '生成失败',
         signalOutput: '信号输出', awaitingInput: '等待输入',
@@ -1100,6 +1170,7 @@ function prismApp() {
         phSelectModel: 'Select a model',
         customModel: 'Custom (manual)',
         labelApiKey: 'API Key',
+        labelApiKeyEnv: 'Key Environment Variable', phApiKeyEnv: 'e.g. OPENAI_API_KEY', apiKeyEnvHelp: 'Used when the inline key is blank; only the variable name is saved.',
         showKey: 'Show key', hideKey: 'Hide key',
         getApiKey: 'Get API Key',
         labelBaseUrl: 'Base URL',
@@ -1114,8 +1185,12 @@ function prismApp() {
         gcpJsonHelp: 'After selection, the system reads the JSON content to save as API credentials.',
         phKeyStored: 'stored · retype to overwrite', phKeyPaste: 'paste key here',
         phModel: 'model-id',
-        labelOutputDir: 'Master Output Directory',
-        phOutputDir: 'blank = ~/.prismstudio/generated-media',
+        labelOutputDir: 'Master Output Root',
+        phOutputDir: 'blank = ~/prismstudio',
+        policyTitle: '◢ Runtime Policy', policyBadge: 'LOCAL GUARD',
+        labelMaxOutputs: 'Max outputs / request', labelMaxVideoDuration: 'Max video seconds', labelMaxInline: 'Inline limit (MiB)', labelMaxInput: 'Input budget (MiB)', labelAllow4k: 'Allow 4K',
+        labelAllowedInputs: 'Additional input roots', phAllowedInputs: 'one absolute directory per line', allowedInputsHelp: 'Only references under these roots or the output root may be read and sent upstream.',
+        labelDiagnostics: 'Enable redacted diagnostics', phDiagnosticsPath: 'blank = ~/.prismstudio/diagnostics.jsonl', diagnosticsHelp: 'Logs model, protocol, latency, and outcome only—never prompts, keys, or file paths.',
         btnCommit: '▸ Commit Config', btnCommitting: 'committing…',
         committed: '✓ COMMITTED', commitFailed: 'commit failed',
         autosaved: '✓ autosaved',
@@ -1129,7 +1204,7 @@ function prismApp() {
         labelVoice: 'Voice', phVoice: 'e.g. Cherry',
         warnNotLive: '⚠ CHANNEL NOT LIVE — this modality has no stored key. Set it in Channels, or paste a key below for one-shot testing.',
         labelTempKey: 'Temp Key', tempKeyHint: '(one-shot, not stored)', phTempKey: 'blank = use stored key',
-        labelPlaygroundDir: 'Playground Output', phPlaygroundDir: 'blank = ~/.prismstudio/playground',
+        labelPlaygroundDir: 'Playground Output', phPlaygroundDir: 'blank = ~/prismstudio/playground',
         btnGenerate: '▸ Generate', btnGenerating: 'rendering… video may take 1–5 min',
         generationFailed: 'generation failed',
         signalOutput: 'SIGNAL OUTPUT', awaitingInput: 'awaiting input',
@@ -1170,7 +1245,7 @@ function prismApp() {
     modelDropdownConfig(key) {
       const self = this
       return {
-        placeholder: self.t.phSelectModel,
+        getPlaceholder: () => self.t.phSelectModel,
         getValue: () => self.config[key]?.presetId || '',
         getGroups: () => {
           const byVendor = {}
@@ -1203,7 +1278,7 @@ function prismApp() {
     protocolDropdownConfig(key) {
       const self = this
       return {
-        placeholder: self.t.phSelectProtocol,
+        getPlaceholder: () => self.t.phSelectProtocol,
         getValue: () => self.config[key]?.protocol || '',
         getGroups: () => [{ items: (PROTOCOL_OPTIONS[self.lang] && PROTOCOL_OPTIONS[self.lang][key]) || [] }],
       }
@@ -1256,7 +1331,8 @@ function prismApp() {
       } catch {}
       return this.lang === 'zh' ? '已选择 JSON 文件' : 'Selected JSON file'
     },
-    config: { image: {enabled:false,presetId:'',apiKey:''}, video: {enabled:false,presetId:'',apiKey:''}, audio: {enabled:false,presetId:'',apiKey:''}, outputDir: '' },
+    config: { image: {enabled:false,presetId:'',apiKey:'',apiKeyEnv:''}, video: {enabled:false,presetId:'',apiKey:'',apiKeyEnv:''}, audio: {enabled:false,presetId:'',apiKey:'',apiKeyEnv:''}, outputDir: '', policy:{maxOutputs:4,maxVideoDurationSec:15,allow4k:true,maxInlineMiB:8,maxInputMiB:128,allowedInputDirs:[]}, diagnostics:{enabled:false,logFile:''} },
+    allowedInputDirsText: '',
     // 各模态 API Key 是否明文显示（内存态，不存 config.json）
     showKey: { image:false, video:false, audio:false },
     showTempKey: false,
@@ -1270,7 +1346,7 @@ function prismApp() {
     presetsError: '', statusError: '', exportError: '',
     retryingLoad: false, retryingAux: false,
 
-    test: { modality: 'image', prompt: '', size: '', numberOfImages: 1, duration: 5, task: 'tts', voice: '', tempKey: '', outputDir: '' },
+    test: { modality: 'image', prompt: '', size: '', numberOfImages: 1, numberOfVideos: 1, duration: 5, task: 'tts', voice: '', tempKey: '', outputDir: '' },
     testing: false, testResult: null, testError: '',
 
     exportAgent: 'claude', exportData: null, exportText: '', copied: false,
@@ -1337,14 +1413,21 @@ function prismApp() {
       // 监听每个模态的关键字段 + outputDir，任一变化即 debounce 自动保存。
       const watchedPaths = [];
       for (const k of ['image','video','audio']) {
-        for (const f of ['enabled','presetId','apiKey','model','protocol','baseUrl','audioTask']) {
+        for (const f of ['enabled','presetId','apiKey','apiKeyEnv','model','protocol','baseUrl','audioTask']) {
           watchedPaths.push('config.' + k + '.' + f);
         }
       }
       watchedPaths.push('config.outputDir');
+      for (const p of ['config.policy.maxOutputs','config.policy.maxVideoDurationSec','config.policy.allow4k','config.policy.maxInlineMiB','config.policy.maxInputMiB','config.diagnostics.enabled','config.diagnostics.logFile']) watchedPaths.push(p);
       for (const p of watchedPaths) {
         this.$watch(p, () => this.scheduleAutoSave());
       }
+      this.$watch('allowedInputDirsText', (value) => {
+        // This JavaScript lives inside a TypeScript template literal, so the newline
+        // escape must survive HTML generation instead of becoming a literal line break.
+        this.config.policy.allowedInputDirs = String(value || '').split(/\\n|,/).map(x => x.trim()).filter(Boolean);
+        this.scheduleAutoSave();
+      });
       this._watchersInstalled = true;
     },
     async retryConfigLoad() {
@@ -1383,12 +1466,24 @@ function prismApp() {
           throw new Error(data?.error || this.t.commitFailed);
         }
         this.config = data;
+        if (!this.config.policy || typeof this.config.policy !== 'object') this.config.policy = {};
+        if (!Number.isFinite(this.config.policy.maxOutputs)) this.config.policy.maxOutputs = 4;
+        if (!Number.isFinite(this.config.policy.maxVideoDurationSec)) this.config.policy.maxVideoDurationSec = 15;
+        if (typeof this.config.policy.allow4k !== 'boolean') this.config.policy.allow4k = true;
+        if (!Number.isFinite(this.config.policy.maxInlineMiB)) this.config.policy.maxInlineMiB = 8;
+        if (!Number.isFinite(this.config.policy.maxInputMiB)) this.config.policy.maxInputMiB = 128;
+        if (!Array.isArray(this.config.policy.allowedInputDirs)) this.config.policy.allowedInputDirs = [];
+        this.allowedInputDirsText = this.config.policy.allowedInputDirs.join('\\n');
+        if (!this.config.diagnostics || typeof this.config.diagnostics !== 'object') this.config.diagnostics = {enabled:false,logFile:''};
+        if (typeof this.config.diagnostics.enabled !== 'boolean') this.config.diagnostics.enabled = false;
+        if (typeof this.config.diagnostics.logFile !== 'string') this.config.diagnostics.logFile = '';
         for (const k of ['image','video','audio']) {
           if (!this.config[k] || typeof this.config[k] !== 'object' || Array.isArray(this.config[k])) this.config[k] = {enabled:false, presetId:'', apiKey:''};
           // 确保 key 记忆 map 存在：byVendor 是新逻辑，byPreset 是历史兼容字段。
           if (!this.config[k].apiKeyByVendor || typeof this.config[k].apiKeyByVendor !== 'object') this.config[k].apiKeyByVendor = {};
           if (!this.config[k].apiKeyByPreset || typeof this.config[k].apiKeyByPreset !== 'object') this.config[k].apiKeyByPreset = {};
           if (typeof this.config[k].apiKey !== 'string') this.config[k].apiKey = '';
+          if (typeof this.config[k].apiKeyEnv !== 'string') this.config[k].apiKeyEnv = '';
           // 记录初始 preset 到内存（不存 config.json，避免污染配置文件）
           this._lastPreset[k] = this.config[k].presetId;
           // 注意：GET 返回的顶层 apiKey 与 map 都是脱敏占位（含 ****）。
@@ -1433,18 +1528,11 @@ function prismApp() {
         return;
       }
       this.saving = true; this.saveMsg = ''; this.saveErr = false;
-      // 保存前：把每个模态当前顶层 apiKey 同步进 vendor/preset 记忆（避免未切换就改的 key 丢失）
-      for (const k of ['image','video','audio']) {
-        this.rememberCurrentApiKey(k);
-      }
+      const revision = this._editRevision;
+      const snapshot = this.createConfigSnapshot();
       try {
-        const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || this.t.commitFailed);
-        // 回填服务器返回的脱敏配置--置 _restoring 防止 watch 触发循环自动保存
-        this._restoring = true;
-        this.config = data.config; this.saveMsg = this.t.committed;
-        this.$nextTick(() => { this._restoring = false; });
+        await this.enqueueConfigSave(snapshot, revision);
+        this.saveMsg = this.t.committed;
         await this.refreshStatus();
       } catch (e) { this.saveErr = true; this.saveMsg = '✗ ' + e.message; }
       finally { this.saving = false; setTimeout(() => this.saveMsg = '', 3000); }
@@ -1457,26 +1545,47 @@ function prismApp() {
     _autoSaveTimer: null,
     _restoring: false,
     _watchersInstalled: false,
+    _editRevision: 0,
+    _lastSavedRevision: -1,
+    _saveQueue: Promise.resolve(),
+    createConfigSnapshot() {
+      // 保存前：把顶层 apiKey 同步进 vendor/preset 记忆；随后立即冻结本次请求快照，
+      // 避免等待队列期间被后续输入改写。
+      for (const k of ['image','video','audio']) this.rememberCurrentApiKey(k);
+      return JSON.stringify(this.config);
+    },
+    enqueueConfigSave(snapshot, revision) {
+      const task = async () => {
+        const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: snapshot });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || this.t.commitFailed);
+        this._lastSavedRevision = Math.max(this._lastSavedRevision, revision);
+        // 旧请求可以完成落盘，但不得把脱敏响应覆盖到更新的本地输入上。
+        if (revision === this._editRevision) {
+          this._restoring = true;
+          this.config = data.config;
+          this.$nextTick(() => { this._restoring = false; });
+        }
+        return data;
+      };
+      const queued = this._saveQueue.catch(() => {}).then(task);
+      this._saveQueue = queued;
+      return queued;
+    },
     scheduleAutoSave() {
       // 首次载入回填阶段不触发；保存后从服务器回填配置时也不触发（防循环）；
       // 载入失败时也不触发（避免在 config 半就绪时把残缺数据覆盖写回磁盘）。
       if (!this._loaded || this._restoring || this.loadError) return;
+      this._editRevision += 1;
       clearTimeout(this._autoSaveTimer);
       this._autoSaveTimer = setTimeout(() => this.silentSave(), 800);
     },
     async silentSave() {
-      // 复用 saveConfig 的 key 记忆同步逻辑，但不设 saving 状态、成功不弹 toast
-      for (const k of ['image','video','audio']) {
-        this.rememberCurrentApiKey(k);
-      }
+      const revision = this._editRevision;
+      if (revision <= this._lastSavedRevision) return;
+      const snapshot = this.createConfigSnapshot();
       try {
-        const r = await fetch('/api/config', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.config) });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || this.t.commitFailed);
-        // 回填服务器返回的脱敏配置——置 _restoring 防止 watch 触发循环自动保存
-        this._restoring = true;
-        this.config = data.config;
-        this.$nextTick(() => { this._restoring = false; });
+        await this.enqueueConfigSave(snapshot, revision);
         await this.refreshStatus();
         // 极轻量的已保存提示，2s 自动消失
         this.saveMsg = this.t.autosaved || '✓ 已自动保存'; this.saveErr = false;
@@ -1579,7 +1688,7 @@ function prismApp() {
         // 试用台用当前下拉选中的 presetId（含未保存的改动），让"改下拉→直接试"生效
         const m = this.test.modality;
         const visibleKey = this.config[m]?.apiKey;
-        const body = { modality: m, prompt: this.test.prompt, apiKey: this.test.tempKey || (visibleKey && !visibleKey.includes('****') ? visibleKey : undefined), presetId: this.config[m]?.presetId || undefined, model: this.config[m]?.model ?? '', protocol: this.config[m]?.protocol ?? '', baseUrl: this.config[m]?.baseUrl ?? '', size: this.test.size || undefined, numberOfImages: this.test.numberOfImages, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined, outputDir: this.test.outputDir || undefined };
+        const body = { modality: m, prompt: this.test.prompt, apiKey: this.test.tempKey || (visibleKey && !visibleKey.includes('****') ? visibleKey : undefined), apiKeyEnv: this.config[m]?.apiKeyEnv ?? '', presetId: this.config[m]?.presetId || undefined, model: this.config[m]?.model ?? '', protocol: this.config[m]?.protocol ?? '', baseUrl: this.config[m]?.baseUrl ?? '', size: this.test.size || undefined, numberOfImages: m === 'image' ? this.test.numberOfImages : undefined, numberOfVideos: m === 'video' ? this.test.numberOfVideos : undefined, duration: this.test.duration, task: this.test.task, voice: this.test.voice || undefined, outputDir: this.test.outputDir || undefined };
         const r = await fetch('/api/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || this.t.generationFailed);

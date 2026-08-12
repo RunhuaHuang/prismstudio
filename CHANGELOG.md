@@ -4,17 +4,47 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-11
+
 ### Added
+- 新增 WebUI「运行策略」面板：单次数量、视频最长时长、4K 开关、图片/音频内联阈值、参考素材累计读取预算、额外参考素材目录白名单与脱敏诊断日志均可配置。
+- 各模态支持 `apiKeyEnv`，明文 key 为空时从指定环境变量读取，配置文件无需保存真实凭据。
+- 新增 `prismstudio diagnostics` 脱敏诊断命令，以及显式付费 opt-in 的 `bun run contract:smoke -- <modality>` 真实 provider 契约冒烟入口。
 - 新增 **MiniMax H3**（海螺）视频预设：2026-07-31 发布的当前旗舰，全模态输入（文/图/视频/音频）、原生 2K、最长 15s、立体声同步。H3 改用全新 v2 接口（`/v2/video_generation` + `/v2/query/video_generation/{id}`，请求体为 `content` 数组结构），故新增 `minimax-video-v2` 协议族。
 - 新增 **MiniMax Hailuo-2.3-Fast** 视频预设（图生视频快速版，走原 v1 `video_generation` 端点）。
 - 新增 **MiniMax music-3.0** 音乐生成预设（新一代音乐模型，沿用 `minimax` 协议族 + `music` 任务路由）。
 - 新增 **万相 wan2.7-image-pro / wan2.7-image** 图像预设：支持文生图/图生组图/图像编辑/多图参考，Pro 档支持 4K 直出与 12 种语言文字渲染。`formatDashscopeMultimodalImageSize` 为 Pro 档放开像素上限（4096²），并放宽参考图校验让 Pro 支持多图参考。
 
 ### Changed
+- `generateMedia()` 的条件分派重构为协议适配器注册表，为后续按 provider 拆文件建立稳定边界，并提供适配器清单诊断。
+- MCP 工具 JSON Schema 会随运行策略动态收紧数量、视频时长和 4K 枚举；严格 TypeScript 边界检查已纳入常规构建。
+- 图片/音频默认内联上限为 8 MiB，超过阈值时仍安全落盘但只向 MCP/WebUI 返回本地路径，避免大 base64 占用传输、内存和上下文。
+- 参考素材读取从单一输出根目录扩展为「输出根目录 + 显式允许目录」白名单，继续使用 realpath 防止符号链接逃逸。
+- MCP 工具清单改为运行时读取最新配置，并通过 `tools/list_changed` 通知兼容客户端；启用/停用模态、切换模型或修改输出目录后不再固定使用进程启动时的旧状态。
+- 工具 JSON Schema 补充图片/视频数量、压缩率与时长的基础数值边界，减少 agent 生成无效参数。
+- 明确 Bun 版本并在 CI / Release 中校验 npm 与 Bun 双锁文件同步，避免本地审计读取陈旧 `package-lock.json` 产生错误结论。
 - 同步更新 README / README.en 能力总览：预置模型 60→82、协议族 14→18、厂商 13→16，各模态模型表补全 MiniMax H3 / music-3.0、万相 2.7-image 系列等新成员。
 - WebUI 自定义模式「协议」下拉与端点路径映射（`PROTOCOL_ENDPOINT_PATH` / `PROTOCOL_OPTIONS`）补全 `minimax-video-v2` 协议（中英双语）。
 
 ### Fixed
+- 修复仅使用 `apiKeyEnv` 且环境变量有效时，服务端已判定通道就绪但 WebUI 卡片仍显示“空闲”的状态偏差；通道状态现在统一以服务端就绪结果为准。
+- 修复固定路径的本地 Alpine.js 被设置为一年不可变缓存、升级后浏览器可能继续使用旧脚本的问题；静态脚本现会重新验证版本。API 路由同时改为按完整 pathname 精确匹配，避免相似前缀误命中导出接口。
+- 修复未提供 `sessionId` 的 stdio MCP 调用复用全局默认会话，可能把上一对话的生成物、Gemini 历史或 Omni interaction 续接到另一对话的问题；现在仅显式会话启用历史，`generate_image` / `generate_video` 均提供受格式约束的 `sessionId`（兼容 `session_id`）供 stdio 客户端安全续接，并限制 Gemini 会话数、轮数和内存预算。
+- 修复非法协议或跨模态协议可被显示为 ready、适配器重复键测试在 `Map` 去重后失效的问题；协议现使用运行时白名单，注册表在初始化时拒绝重复项，全部预设均验证有真实路由。
+- 修复 Google OAuth token 交换无法随 MCP 请求取消，以及显式无效 Gemini Base URL 静默回退官方域名、可能绕过代理的问题。
+- 修复参考素材未限制累计读取体积、视频 provider 异常返回过多结果不受策略裁剪，以及诊断错误仍可能泄露本地路径、data URI 或签名 URL 查询参数的问题。
+- 修复 WebUI 自动保存与手动保存可并发乱序，慢请求响应覆盖用户较新输入的问题；所有配置写入现串行执行，旧 revision 响应不会回填页面。
+- WebUI 配置校验现在拒绝越界/小数策略值、非法环境变量名、相对素材目录、未知或跨模态协议；JSON Content-Type 改为精确 media type 检查，请求体累计改为 O(n) 计数。
+- CLI 现在会明确拒绝未知参数、缺失/非法的 `--port` 与 `--output-dir`，并校验互斥模式，避免拼写错误后静默启动到错误模式。
+- 修复 WebUI 运行策略新增的换行处理在模板字符串中转义不足，导致内嵌脚本语法错误、配置主体无法渲染的问题；并补齐试用台在自动保存完成前读取页面 `apiKeyEnv` 的路径。
+- 运行策略现在同时检查 prompt 推断出的时长/4K、预设默认 4K 和畸形数量，避免绕过显式参数检查后发出超预算上游请求。
+- 诊断日志中的 provider 错误在落盘前会使用配置内及环境变量解析出的真实密钥再次脱敏，避免非标准错误文本回显凭据。
+- 配置保存改为同目录临时文件、`fsync` 后原子替换，降低异常退出导致 `config.json` 截断和密钥配置丢失的风险；读取时增加运行时类型归一化，坏字段不再触发进程崩溃。
+- 修复 Windows 无法直接覆盖配置文件时的替换回退：旧配置会先移入同目录恢复备份，新文件替换失败则自动恢复，避免过去 delete-then-rename 造成配置与密钥丢失。
+- 修复上游已成功生成但输出目录不可写时图片/音频结果被静默丢弃的问题：现在会紧急内联回传；无法内联的视频则明确报错，不再返回不存在的“成功”路径。
+- 修复关闭某模态后，已运行的 MCP Server 仍可继续调用该模态的问题；运行时解析现在同时校验 `enabled`。
+- 修正文档与 WebUI 占位文案仍把生成物写成旧目录 `~/.prismstudio/`，并把 `outputDir` 根目录误写成最终子目录的问题；真实默认根目录为 `~/prismstudio/`。
+- MCP 与 WebUI 试用台返回上游错误前会脱敏已配置 API Key、拆分式 AccessKey/SecretKey 与常见认证头，降低代理错误回显凭据的风险。
 - 修复 MiniMax H3（`minimax-video-v2`）`ratio` 字段按官方文档分场景处理：① 纯文生视频（t2va）必须显式指定具体比例且不能为 `adaptive`（否则 API 400，错误 2013），现按 `size`/`aspectRatio`/预设 `defaultSize` 自动推导并兜底 16:9；② 图生视频（i2va，content 含图片）官方规定 ratio 恒为 `adaptive`（由首帧图决定，传其他值会被忽略），现显式传 `adaptive` 而非强行推导。
 - 修复图片生成显式 `numberOfImages` 被 prompt 里的自然语言数量词静默覆盖（如传 4 张但 prompt 写"一张"时只返回 1 张）。现显式参数优先，未显式时才从 prompt 解析。
 - 修复 `extForMediaType` 对 `audio/opus` / `video/x-matroska` 标错扩展名（分别落到 `.wav` / `.mp4`），与引擎 `EXT_TO_MIME` 表不一致。现正确输出 `.opus` / `.mkv`。
@@ -192,7 +222,8 @@
 - **测试套件**：引擎分派/缓存/各 provider 适配、persist 落盘等，131 测试 / 434 断言。
 - **CI**：GitHub Actions 跑 typecheck + build（后续补 test）。
 
-[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/RunhuaHuang/prismstudio/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/RunhuaHuang/prismstudio/compare/v0.3.0...v0.3.1

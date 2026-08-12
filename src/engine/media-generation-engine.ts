@@ -23,7 +23,7 @@
  * - M6：MiniMax 透传 n
  */
 
-import { readFileSync, realpathSync } from 'node:fs'
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import { createHmac, randomUUID } from 'node:crypto'
 import {
@@ -47,25 +47,32 @@ export interface GeneratedImageData {
 
 export type MediaModality = 'image' | 'video' | 'audio'
 
-export type MediaProtocol =
-  | 'openai-images'
-  | 'dashscope-async'
-  | 'dashscope-sync'
-  | 'dashscope-voice-clone'
-  | 'volcengine-async'
-  | 'volcengine-tts'
-  | 'volcengine-plan-tts'
-  | 'kling-async'
-  | 'zhipu-async'
-  | 'minimax'
-  | 'minimax-video-v2'
-  | 'minimax-tts-async'
-  | 'minimax-voice-clone'
-  | 'stability'
-  | 'tencent-hunyuan-async'
-  | 'midjourney'
-  | 'gemini-generate-content'
-  | 'google-interactions'
+export const MEDIA_PROTOCOLS = [
+  'openai-images',
+  'dashscope-async',
+  'dashscope-sync',
+  'dashscope-voice-clone',
+  'volcengine-async',
+  'volcengine-tts',
+  'volcengine-plan-tts',
+  'kling-async',
+  'zhipu-async',
+  'minimax',
+  'minimax-video-v2',
+  'minimax-tts-async',
+  'minimax-voice-clone',
+  'stability',
+  'tencent-hunyuan-async',
+  'midjourney',
+  'gemini-generate-content',
+  'google-interactions',
+] as const
+
+export type MediaProtocol = typeof MEDIA_PROTOCOLS[number]
+
+export function isMediaProtocol(value: unknown): value is MediaProtocol {
+  return typeof value === 'string' && (MEDIA_PROTOCOLS as readonly string[]).includes(value)
+}
 
 // ===== 模型预设 =====
 
@@ -795,18 +802,27 @@ export function resolveMediaConfig(
     if (base) model = base
   }
 
+  const rawConfiguredProtocol = credentials.protocol?.trim()
+  if (rawConfiguredProtocol && !isMediaProtocol(rawConfiguredProtocol)) return null
+  const configuredProtocol: MediaProtocol | undefined = isMediaProtocol(rawConfiguredProtocol)
+    ? rawConfiguredProtocol
+    : undefined
+
   const matched = findPresetForCredentials({ ...credentials, model }, modality)
   if (matched) {
+    const protocol = configuredProtocol || matched.protocol
+    const audioTask = matched.audioTask
+    if (!hasRegisteredMediaAdapter(modality, protocol, audioTask)) return null
     return {
       preset: matched,
       presetId: matched.id,
       modality: matched.modality,
-      protocol: (credentials.protocol?.trim() as MediaProtocol) || matched.protocol,
+      protocol,
       baseUrl: credentials.baseUrl?.trim() || matched.baseUrl,
       model: matched.model,
       editModel: matched.editModel,
       supportsEdit: matched.supportsEdit,
-      audioTask: matched.audioTask,
+      audioTask,
     }
   }
 
@@ -816,7 +832,11 @@ export function resolveMediaConfig(
     video: 'kling-async',
     audio: 'dashscope-sync',
   }
-  const protocol = (credentials.protocol?.trim() as MediaProtocol) || defaultProtocolByModality[modality]
+  const protocol = configuredProtocol || defaultProtocolByModality[modality]
+  const configuredAudioTask = credentials.audioTask?.trim()
+  if (configuredAudioTask && !['tts', 'music', 'clone'].includes(configuredAudioTask)) return null
+  const audioTask = (configuredAudioTask as 'tts' | 'music' | 'clone' | undefined) || 'tts'
+  if (!hasRegisteredMediaAdapter(modality, protocol, audioTask)) return null
   return {
     preset: null,
     presetId: CUSTOM_MEDIA_PRESET_ID,
@@ -827,7 +847,7 @@ export function resolveMediaConfig(
     editModel: credentials.editModel?.trim() || undefined,
     // 自定义模型的编辑能力仅对图像模态自动开启；视频不能把上一轮 mp4 当参考图自动续接。
     supportsEdit: modality === 'image' && protocol !== 'minimax' && protocol !== 'dashscope-sync' && protocol !== 'dashscope-voice-clone' && protocol !== 'minimax-tts-async' && protocol !== 'minimax-voice-clone',
-    audioTask: (credentials.audioTask?.trim() as 'tts' | 'music' | 'clone') || 'tts',
+    audioTask,
   }
 }
 
@@ -879,16 +899,28 @@ export function isPathWithinRoot(
     && !pathOps.isAbsolute(rel)
 }
 
-export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile[] {
+export function readReferenceFiles(
+  paths: string[],
+  cwd?: string,
+  extraAllowedRoots: string[] = [],
+  maxTotalBytes = 128 * 1024 * 1024,
+  sharedBudget?: { remainingBytes: number },
+): ReferenceFile[] {
   const files: ReferenceFile[] = []
+  let totalBytes = 0
+  const effectiveMaxTotalBytes = Number.isFinite(maxTotalBytes) && maxTotalBytes >= 0
+    ? Math.floor(maxTotalBytes)
+    : 128 * 1024 * 1024
   // 参考文件由用户/MCP agent 明确指定路径（如同「打开文件」语义），读取并发送给厂商是其
   // 预期用途。当提供 cwd 时，额外做一层越界校验：把路径与 cwd 都 realpath 后比较，确保
-  // cwd 内的符号链接不会指向白名单外的敏感文件。cwd 缺失时不限制（参考图本就是任意路径）。
-  // 若 cwd 传入但 realpath 失败（目录不存在/权限不足），fail-closed 直接拒绝读取，
-  // 不静默退化为不校验（否则安全形同虚设）。
-  const allowedRoot = cwd ? resolveRealPathSafe(resolve(cwd)) : undefined
-  if (cwd && !allowedRoot) {
-    console.warn(`[Media Generation] cwd 无法解析，已拒绝读取参考文件: ${cwd}`)
+  // cwd 内的符号链接不会指向白名单外的敏感文件。cwd 不存在时，仍允许读取已存在的额外
+  // 白名单目录；否则对相对路径 fail-closed，避免输出目录尚未创建时误拒合法白名单素材。
+  const cwdRoot = cwd ? resolveRealPathSafe(resolve(cwd)) : undefined
+  const extraRoots = extraAllowedRoots.map((root) => resolveRealPathSafe(resolve(root)))
+  const allowedRoots = [cwdRoot, ...extraRoots]
+    .filter((root): root is string => !!root)
+  if (cwd && !cwdRoot && extraRoots.every((root) => !root)) {
+    console.warn(`[Media Generation] cwd 无法解析且没有可用白名单，已拒绝读取参考文件: ${cwd}`)
     return files
   }
   for (const rawPath of paths) {
@@ -899,12 +931,12 @@ export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile
         console.warn(`[Media Generation] 参考文件不存在: ${filePath}`)
         continue
       }
-      if (allowedRoot) {
+      if (allowedRoots.length > 0) {
         // 用 realpath 后的路径做越界判定：否则 cwd 内一个指向 /etc 的软链会绕过
         // relative() 校验，读到白名单外的敏感文件。allowedRoot 同样 realpath，
         // 避免软链前缀不一致导致合法文件被误拒（macOS /var → /private/var）。
-        if (!isPathWithinRoot(allowedRoot, realPath)) {
-          console.warn(`[Media Generation] 参考文件不在工作目录内，已拒绝: ${filePath}`)
+        if (!allowedRoots.some((root) => isPathWithinRoot(root, realPath))) {
+          console.warn(`[Media Generation] 参考文件不在允许的输入目录内，已拒绝: ${filePath}`)
           continue
         }
       }
@@ -914,11 +946,37 @@ export function readReferenceFiles(paths: string[], cwd?: string): ReferenceFile
         console.warn(`[Media Generation] 不支持的文件类型，跳过: ${filePath}`)
         continue
       }
-      files.push({
-        mediaType: mimeType,
-        base64: readFileSync(realPath).toString('base64'),
-        filename: filePath.split(/[\\/]/).pop() ?? 'reference.bin',
-      })
+      // 打开后再 fstat/read，避免 stat(realPath) 与 readFile(realPath) 之间的
+      // TOCTOU：即使路径被替换，读取的也是已打开的那个文件描述符。
+      const fd = openSync(realPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      try {
+        const stat = fstatSync(fd)
+        if (!stat.isFile()) {
+          console.warn(`[Media Generation] 参考素材不是普通文件，跳过: ${filePath}`)
+          continue
+        }
+        const remainingBytes = sharedBudget ? sharedBudget.remainingBytes : effectiveMaxTotalBytes - totalBytes
+        if (stat.size > effectiveMaxTotalBytes || stat.size > remainingBytes) {
+          console.warn(`[Media Generation] 参考素材超过读取预算，跳过: ${filePath}`)
+          continue
+        }
+        const data = Buffer.allocUnsafe(stat.size)
+        let offset = 0
+        while (offset < data.length) {
+          const read = readSync(fd, data, offset, data.length - offset, offset)
+          if (read <= 0) throw new Error('参考素材在读取过程中提前结束')
+          offset += read
+        }
+        totalBytes += stat.size
+        if (sharedBudget) sharedBudget.remainingBytes -= stat.size
+        files.push({
+          mediaType: mimeType,
+          base64: data.toString('base64'),
+          filename: filePath.split(/[\\/]/).pop() ?? 'reference.bin',
+        })
+      } finally {
+        closeSync(fd)
+      }
     } catch (error) {
       console.warn(`[Media Generation] 读取参考文件失败: ${rawPath}`, error)
     }
@@ -961,10 +1019,8 @@ export function getLastGenerated(modality: MediaModality, sessionId: string): st
 }
 
 export function clearMediaGenerationSessionHistory(sessionId: string): void {
-  for (const key of [...lastGeneratedByModalitySession.keys()]) {
-    if (key.endsWith(`:${sessionId}`)) {
-      lastGeneratedByModalitySession.delete(key)
-    }
+  for (const modality of ['image', 'video', 'audio'] as const) {
+    lastGeneratedByModalitySession.delete(cacheKey(modality, sessionId))
   }
   // 同时清理 Gemini 多轮历史（统一入口，避免调用方需要分别清理）
   geminiSessionHistory.delete(sessionId)
@@ -983,7 +1039,78 @@ async function safeParseJson(response: Response, label: string): Promise<unknown
   }
 }
 
-/** 下载 url 为 base64 */
+async function responseBodyToBase64(response: Response, maxBytes = MAX_DOWNLOADED_MEDIA_BYTES): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader()
+    const pieces: string[] = []
+    let pending = Buffer.alloc(0)
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = Buffer.from(value)
+        total += chunk.length
+        if (total > maxBytes) throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+        const combined = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk
+        const usableLength = combined.length - (combined.length % 3)
+        if (usableLength > 0) pieces.push(combined.subarray(0, usableLength).toString('base64'))
+        pending = combined.subarray(usableLength)
+      }
+    } catch (error) {
+      try { await reader.cancel() } catch { /* ignore cancellation failure */ }
+      throw error
+    } finally {
+      try { reader.releaseLock() } catch { /* ignore */ }
+    }
+    if (pending.length > 0) pieces.push(pending.toString('base64'))
+    return pieces.join('')
+  }
+  const arrayBuffer = await response.arrayBuffer()
+  if (arrayBuffer.byteLength > maxBytes) {
+    throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+  }
+  return Buffer.from(arrayBuffer).toString('base64')
+}
+
+async function responseBodyToBuffer(response: Response, maxBytes = MAX_DOWNLOADED_MEDIA_BYTES): Promise<Buffer> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+  }
+  if (response.body?.getReader) {
+    const reader = response.body.getReader()
+    const chunks: Buffer[] = []
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = Buffer.from(value)
+        total += chunk.length
+        if (total > maxBytes) throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+        chunks.push(chunk)
+      }
+    } catch (error) {
+      try { await reader.cancel() } catch { /* ignore cancellation failure */ }
+      throw error
+    } finally {
+      try { reader.releaseLock() } catch { /* ignore */ }
+    }
+    return Buffer.concat(chunks, total)
+  }
+  const arrayBuffer = await response.arrayBuffer()
+  if (arrayBuffer.byteLength > maxBytes) {
+    throw new Error(`下载生成内容超过大小上限（${Math.floor(maxBytes / 1024 / 1024)} MiB）`)
+  }
+  return Buffer.from(arrayBuffer)
+}
+
+/** 下载 url 为 base64；优先按流分块编码，避免 arrayBuffer + Buffer 双峰。 */
 async function downloadAsBase64(
   url: string,
   fetchFn: typeof globalThis.fetch,
@@ -995,9 +1122,8 @@ async function downloadAsBase64(
   if (!response.ok) {
     throw new Error(`下载生成内容失败 (${response.status})`)
   }
-  const arrayBuffer = await response.arrayBuffer()
   const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim() || fallbackMediaType
-  return { mediaType, data: Buffer.from(arrayBuffer).toString('base64') }
+  return { mediaType, data: await responseBodyToBase64(response) }
 }
 
 function audioMimeForFilename(filename: string, fallbackMediaType = 'audio/mpeg'): string {
@@ -1064,8 +1190,7 @@ async function downloadMinimaxAudioAsBase64(
   if (!response.ok) {
     throw new Error(`下载 MiniMax 音频失败 (${response.status})`)
   }
-  const arrayBuffer = await response.arrayBuffer()
-  const buffer = Buffer.from(arrayBuffer)
+  const buffer = await responseBodyToBuffer(response)
   const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim() || fallbackMediaType
   if (mediaType === 'application/x-tar' || mediaType === 'application/tar' || buffer.toString('ascii', 257, 263) === 'ustar\0') {
     const extracted = extractAudioFromTarBuffer(buffer, fallbackMediaType)
@@ -1094,14 +1219,6 @@ function base64FromMinimaxAudioPayload(value: string, audioFormat?: string): str
     return Buffer.from(compact, 'hex').toString('base64')
   }
   return trimmed
-}
-
-function base64FromHexAudioPayload(value: string, source: string): string {
-  const compact = value.trim().replace(/\s+/g, '')
-  if (!compact || compact.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(compact)) {
-    throw new Error(`${source} 返回的音频不是有效 hex 编码`)
-  }
-  return Buffer.from(compact, 'hex').toString('base64')
 }
 
 function imageMimeForFormat(format?: string): string {
@@ -1238,6 +1355,7 @@ const IMAGE_POLL_TIMEOUT_MS = 300000
 const AUDIO_POLL_TIMEOUT_MS = 300000
 const MUSIC_SYNC_TIMEOUT_MS = 300000
 const MUSIC_DOWNLOAD_TIMEOUT_MS = 120000
+const MAX_DOWNLOADED_MEDIA_BYTES = 512 * 1024 * 1024
 
 // ===== 调用入口 =====
 
@@ -1253,6 +1371,8 @@ export interface GenerateMediaInput {
   apiKey: string
   size?: string
   numberOfImages?: number
+  /** 视频请求数量；numberOfImages 仅作为旧版内部调用的兼容别名保留。 */
+  numberOfVideos?: number
   /** 视频/音频时长（秒） */
   duration?: number
   /** 参考文件本地路径（编辑/图生视频/声音克隆样本） */
@@ -1300,7 +1420,6 @@ export interface GenerateMediaInput {
   mode?: string
   guidanceScale?: number
   stylePreset?: string
-  shotType?: 'single' | 'multi'
   /** 音频常用参数 */
   speed?: number
   volume?: number
@@ -1323,6 +1442,12 @@ export interface GenerateMediaInput {
   coverFeatureId?: string
   aigcWatermark?: boolean
   cwd?: string
+  /** cwd 之外显式允许读取参考素材的额外目录 */
+  allowedInputRoots?: string[]
+  /** 单次允许读取并编码的参考素材总字节数 */
+  maxInputBytes?: number
+  /** 内部使用：同一次请求的所有参考字段共享一个读取预算 */
+  referenceReadBudget?: { remainingBytes: number }
   /** 会话标识，用于 Gemini 多轮历史隔离（其它协议忽略） */
   sessionId?: string
   fetchFn?: typeof globalThis.fetch
@@ -1335,70 +1460,141 @@ export interface GenerateMediaOutput {
   text?: string
 }
 
+export type AudioTask = 'tts' | 'music' | 'clone'
+type MediaAdapter = (
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[],
+) => Promise<GenerateMediaOutput>
+
+function adapterKey(modality: MediaModality, protocol: MediaProtocol, task?: AudioTask): string {
+  return task ? `${modality}:${protocol}:${task}` : `${modality}:${protocol}`
+}
+
+/**
+ * 协议适配注册表：把核心路由与 provider 实现解耦。后续将 provider 函数移动到独立文件时，
+ * 只需迁移实现并保留注册项，无需继续扩张 generateMedia 的条件分支。
+ */
+const MEDIA_ADAPTER_ENTRIES: ReadonlyArray<readonly [string, MediaAdapter]> = [
+  [adapterKey('image', 'openai-images'), async (input, fetchFn, references) => (
+    isZhipuImageModel(input.config.model)
+      ? callZhipuImageApi(input, fetchFn)
+      : callOpenAiImagesApi(input, fetchFn, references)
+  )],
+  [adapterKey('image', 'gemini-generate-content'), callGeminiImageApi],
+  [adapterKey('image', 'dashscope-async'), callDashscopeImageApi],
+  [adapterKey('image', 'minimax'), callMinimaxImageApi],
+  [adapterKey('image', 'stability'), async (input, fetchFn) => callStabilityImageApi(input, fetchFn)],
+  [adapterKey('image', 'tencent-hunyuan-async'), callTencentHunyuanAsyncApi],
+  [adapterKey('image', 'midjourney'), async (input, fetchFn) => callMidjourneyApi(input, fetchFn)],
+
+  [adapterKey('video', 'volcengine-async'), callVolcengineVideoApi],
+  [adapterKey('video', 'kling-async'), callKlingVideoApi],
+  [adapterKey('video', 'zhipu-async'), callZhipuVideoApi],
+  [adapterKey('video', 'dashscope-async'), callDashscopeVideoApi],
+  [adapterKey('video', 'minimax'), callMinimaxVideoApi],
+  [adapterKey('video', 'minimax-video-v2'), callMinimaxVideoV2Api],
+  [adapterKey('video', 'tencent-hunyuan-async'), callTencentHunyuanAsyncApi],
+  [adapterKey('video', 'google-interactions'), callGoogleInteractionsVideoApi],
+
+  [adapterKey('audio', 'minimax', 'music'), async (input, fetchFn, references) => callMinimaxMusicApi(input, fetchFn, references)],
+  [adapterKey('audio', 'volcengine-tts', 'clone'), callVolcengineTtsApi],
+  [adapterKey('audio', 'zhipu-async', 'clone'), callZhipuVoiceCloneApi],
+  [adapterKey('audio', 'dashscope-sync', 'clone'), callDashscopeVoiceCloneApi],
+  [adapterKey('audio', 'dashscope-voice-clone', 'clone'), callDashscopeVoiceCloneApi],
+  [adapterKey('audio', 'minimax', 'clone'), callMinimaxVoiceCloneApi],
+  [adapterKey('audio', 'minimax-tts-async', 'clone'), callMinimaxVoiceCloneApi],
+  [adapterKey('audio', 'minimax-voice-clone', 'clone'), callMinimaxVoiceCloneApi],
+  [adapterKey('audio', 'volcengine-tts', 'tts'), callVolcengineTtsApi],
+  [adapterKey('audio', 'volcengine-plan-tts', 'tts'), async (input, fetchFn) => callVolcenginePlanTtsApi(input, fetchFn)],
+  [adapterKey('audio', 'zhipu-async', 'tts'), async (input, fetchFn) => callZhipuTtsApi(input, fetchFn)],
+  [adapterKey('audio', 'dashscope-sync', 'tts'), async (input, fetchFn) => callDashscopeTtsApi(input, fetchFn)],
+  [adapterKey('audio', 'minimax', 'tts'), async (input, fetchFn) => callMinimaxTtsApi(input, fetchFn)],
+  [adapterKey('audio', 'minimax-tts-async', 'tts'), async (input, fetchFn) => callMinimaxAsyncTtsApi(input, fetchFn)],
+]
+
+function createMediaAdapterRegistry(entries: ReadonlyArray<readonly [string, MediaAdapter]>): Map<string, MediaAdapter> {
+  const registry = new Map<string, MediaAdapter>()
+  for (const [key, adapter] of entries) {
+    if (registry.has(key)) throw new Error(`媒体协议适配器重复注册: ${key}`)
+    registry.set(key, adapter)
+  }
+  return registry
+}
+
+const MEDIA_ADAPTER_REGISTRY = createMediaAdapterRegistry(MEDIA_ADAPTER_ENTRIES)
+
+export function hasRegisteredMediaAdapter(
+  modality: MediaModality,
+  protocol: unknown,
+  task: AudioTask = 'tts',
+): boolean {
+  if (!isMediaProtocol(protocol)) return false
+  if (modality !== 'audio') return MEDIA_ADAPTER_REGISTRY.has(adapterKey(modality, protocol))
+  const effectiveProtocol = protocol === 'minimax' && task === 'tts' ? 'minimax-tts-async' : protocol
+  return MEDIA_ADAPTER_REGISTRY.has(adapterKey(modality, effectiveProtocol, task))
+}
+
+export function listRegisteredMediaAdapters(): string[] {
+  return [...MEDIA_ADAPTER_REGISTRY.keys()].sort()
+}
+
 /**
  * 统一多媒体生成入口。按 (modality, protocol) 分派。
  */
 export async function generateMedia(input: GenerateMediaInput): Promise<GenerateMediaOutput> {
   const fetchFn = input.fetchFn ?? fetch
-  const modality = input.modality
-  const modelPreset = input.config.preset
+  const maxInputBytes = Number.isFinite(input.maxInputBytes) && Number(input.maxInputBytes) >= 0
+    ? Math.floor(Number(input.maxInputBytes))
+    : 128 * 1024 * 1024
+  const existingRemaining = input.referenceReadBudget?.remainingBytes
+  const remainingBytes = Number.isFinite(existingRemaining) && Number(existingRemaining) >= 0
+    ? Math.min(maxInputBytes, Math.floor(Number(existingRemaining)))
+    : maxInputBytes
+  const effectiveInput = {
+    ...input,
+    maxInputBytes,
+    referenceReadBudget: input.referenceReadBudget
+      ? Object.assign(input.referenceReadBudget, { remainingBytes })
+      : { remainingBytes },
+  }
+  const modality = effectiveInput.modality
+  const modelPreset = effectiveInput.config.preset
 
   // preset 为 null（自定义配置）时，按 model+modality 反查预设的 audioTask：
   // 仅当模型明确是 music/clone（非 tts）时采用反查结果，纠正下拉框残留的脏 audioTask
   // （如 music 模型残留 'tts'）。tts 不反查，以免破坏同步/异步 TTS 的既有路由判定。
-  const presetTaskByModel = findPresetByModel(input.config.model, modality)?.audioTask
+  const presetTaskByModel = findPresetByModel(effectiveInput.config.model, modality)?.audioTask
   const resolvedTaskByModel = presetTaskByModel === 'music' || presetTaskByModel === 'clone' ? presetTaskByModel : undefined
-  const configuredTask = modelPreset?.audioTask ?? resolvedTaskByModel ?? input.config.audioTask
+  const configuredTask = modelPreset?.audioTask ?? resolvedTaskByModel ?? effectiveInput.config.audioTask
   // resolveMediaConfig 已经把“用户显式覆盖 > 预设默认值”的优先级折叠进
   // config.protocol。这里若再次从 preset 取值，会让解析结果看似正确、实际分派
   // 却悄悄回到预设协议，导致自定义代理/兼容协议完全不生效。
-  let protocol = input.config.protocol
+  let protocol = effectiveInput.config.protocol
   // Agent 侧无实时诉求，统一让所有 MiniMax TTS 走异步长文本接口（t2a_async_v2）
   // 仅对音频模态生效：视频/图像即使 configuredTask 落到默认 'tts' 也必须保留 'minimax' 协议族，
   // 否则会被改写成 'minimax-tts-async'，导致视频落到不支持的协议族而报错。
   if (modality === 'audio' && protocol === 'minimax' && configuredTask === 'tts') {
     protocol = 'minimax-tts-async'
   }
-  const config = input.config
-  const explicitReferenceCount = input.referencePaths?.length ?? 0
-  const references = input.referencePaths?.length
-    ? readReferenceFiles(input.referencePaths, input.cwd)
+  const config = effectiveInput.config
+  const explicitReferenceCount = effectiveInput.referencePaths?.length ?? 0
+  const references = effectiveInput.referencePaths?.length
+    ? readReferenceFiles(
+      effectiveInput.referencePaths,
+      effectiveInput.cwd,
+      effectiveInput.allowedInputRoots,
+      effectiveInput.maxInputBytes,
+      effectiveInput.referenceReadBudget,
+    )
     : []
   if (explicitReferenceCount > 0 && references.length === 0) {
     throw new Error('已提供参考文件路径，但没有可用文件（可能不存在、类型不支持，或不在当前工作目录内）')
   }
 
-  // 图像
-  if (modality === 'image') {
-    if (protocol === 'openai-images') {
-      if (isZhipuImageModel(config.model)) return callZhipuImageApi(input, fetchFn)
-      return callOpenAiImagesApi(input, fetchFn, references)
-    }
-    if (protocol === 'gemini-generate-content') return callGeminiImageApi(input, fetchFn, references)
-    if (protocol === 'dashscope-async') return callDashscopeImageApi(input, fetchFn, references)
-    if (protocol === 'minimax') return callMinimaxImageApi(input, fetchFn, references)
-    if (protocol === 'stability') return callStabilityImageApi(input, fetchFn)
-    if (protocol === 'tencent-hunyuan-async') return callTencentHunyuanAsyncApi(input, fetchFn, references)
-    if (protocol === 'midjourney') return callMidjourneyApi(input, fetchFn)
-    throw new Error(`图像不支持协议族: ${protocol}`)
-  }
-
-  // 视频
-  if (modality === 'video') {
-    if (protocol === 'volcengine-async') return callVolcengineVideoApi(input, fetchFn, references)
-    if (protocol === 'kling-async') return callKlingVideoApi(input, fetchFn, references)
-    if (protocol === 'zhipu-async') return callZhipuVideoApi(input, fetchFn, references)
-    if (protocol === 'dashscope-async') return callDashscopeVideoApi(input, fetchFn, references)
-    if (protocol === 'minimax') return callMinimaxVideoApi(input, fetchFn, references)
-    if (protocol === 'minimax-video-v2') return callMinimaxVideoV2Api(input, fetchFn, references)
-    if (protocol === 'tencent-hunyuan-async') return callTencentHunyuanAsyncApi(input, fetchFn, references)
-    if (protocol === 'google-interactions') return callGoogleInteractionsVideoApi(input, fetchFn, references)
-    throw new Error(`视频不支持协议族: ${protocol}`)
-  }
-
   // 音频
   if (modality === 'audio') {
-    const requestedTask = input.audioTask
+    const requestedTask = effectiveInput.audioTask
     if (config.preset && requestedTask && configuredTask && requestedTask !== configuredTask) {
       throw new Error(`当前配置的音频模型用于 ${configuredTask}，不能执行 ${requestedTask}；请在设置中切换到对应音频模型后重试`)
     }
@@ -1406,31 +1602,16 @@ export async function generateMedia(input: GenerateMediaInput): Promise<Generate
     if (task === 'tts' && explicitReferenceCount > 0) {
       task = 'clone'
     }
-    if (task === 'music') {
-      if (protocol !== 'minimax') throw new Error(`音乐生成不支持协议族: ${protocol}`)
-      return callMinimaxMusicApi(input, fetchFn)
-    }
-    if (task === 'clone') {
-      if (protocol === 'volcengine-tts') return callVolcengineTtsApi(input, fetchFn, references)
-      if (protocol === 'zhipu-async') return callZhipuVoiceCloneApi(input, fetchFn, references)
-      if (protocol === 'dashscope-sync' || protocol === 'dashscope-voice-clone') return callDashscopeVoiceCloneApi(input, fetchFn, references)
-      if (protocol === 'minimax' || protocol === 'minimax-tts-async' || protocol === 'minimax-voice-clone') return callMinimaxVoiceCloneApi(input, fetchFn, references)
-      throw new Error(`声音复刻不支持协议族: ${protocol}`)
-    }
-    // tts
-    if (protocol === 'volcengine-tts') return callVolcengineTtsApi(input, fetchFn, references)
-    if (protocol === 'volcengine-plan-tts') return callVolcenginePlanTtsApi(input, fetchFn)
-    if (protocol === 'zhipu-async') return callZhipuTtsApi(input, fetchFn)
-    if (protocol === 'dashscope-sync') return callDashscopeTtsApi(input, fetchFn)
-    // 注意：generateMedia 入口已把所有 minimax+tts 改写成 minimax-tts-async，
-    // 正常流程不会走到这里。保留此分支作为防御兜底——若未来有同步 TTS 诉求，
-    // 只需在入口取消改写即可恢复同步路径，无需重建分派。
-    if (protocol === 'minimax') return callMinimaxTtsApi(input, fetchFn)
-    if (protocol === 'minimax-tts-async') return callMinimaxAsyncTtsApi(input, fetchFn)
-    throw new Error(`TTS 不支持协议族: ${protocol}`)
+    const adapter = MEDIA_ADAPTER_REGISTRY.get(adapterKey(modality, protocol, task))
+    if (adapter) return adapter(effectiveInput, fetchFn, references)
+    const label = task === 'music' ? '音乐生成' : task === 'clone' ? '声音复刻' : 'TTS'
+    throw new Error(`${label}不支持协议族: ${protocol}`)
   }
 
-  throw new Error(`未知模态: ${modality}`)
+  const adapter = MEDIA_ADAPTER_REGISTRY.get(adapterKey(modality, protocol))
+  if (adapter) return adapter(effectiveInput, fetchFn, references)
+  const label = modality === 'image' ? '图像' : modality === 'video' ? '视频' : '未知模态'
+  throw new Error(`${label}不支持协议族: ${protocol}`)
 }
 
 // ===== 协议族：openai-images（图像） =====
@@ -1825,6 +2006,34 @@ interface GeminiResponse {
 
 /** Gemini 多轮对话历史（按 sessionId 隔离，跨调用保持上下文以支持迭代编辑） */
 const geminiSessionHistory = new Map<string, GeminiContent[]>()
+const MAX_GEMINI_SESSIONS = 8
+const MAX_GEMINI_HISTORY_CONTENTS = 12
+const MAX_GEMINI_HISTORY_BYTES = 32 * 1024 * 1024
+
+function estimateGeminiHistoryBytes(history: GeminiContent[]): number {
+  let bytes = 0
+  for (const content of history) {
+    bytes += content.role.length
+    for (const part of content.parts) {
+      if (part.text) bytes += Buffer.byteLength(part.text)
+      if (part.inlineData?.data) bytes += Buffer.byteLength(part.inlineData.data)
+      if (part.inlineData?.mimeType) bytes += part.inlineData.mimeType.length
+      if (part.thoughtSignature) bytes += part.thoughtSignature.length
+      if (part.thought_signature) bytes += part.thought_signature.length
+    }
+  }
+  return bytes
+}
+
+function trimGeminiHistory(history: GeminiContent[]): GeminiContent[] {
+  const trimmed = history.slice(-MAX_GEMINI_HISTORY_CONTENTS)
+  // 历史按 user/model 成对追加；从前端成对淘汰。若仅最近一轮本身就超过预算，
+  // 直接禁用该轮历史缓存，优先保证长驻 MCP 进程不会被超大 base64 响应拖垮。
+  while (trimmed.length > 2 && estimateGeminiHistoryBytes(trimmed) > MAX_GEMINI_HISTORY_BYTES) {
+    trimmed.splice(0, 2)
+  }
+  return estimateGeminiHistoryBytes(trimmed) <= MAX_GEMINI_HISTORY_BYTES ? trimmed : []
+}
 
 /** thoughtSignature 占位符（多轮编辑必需，见 Gemini 官方文档） */
 const GEMINI_DUMMY_SIGNATURE = 'skip_thought_signature_validator'
@@ -1883,9 +2092,10 @@ async function callGeminiImageApi(
   const apiKey = input.apiKey
   if (!apiKey?.trim()) throw new Error('未配置 Gemini API Key')
 
-  // sessionId 用于隔离多轮历史；缺省时用固定 key（单轮也能工作）
-  const sessionId = input.sessionId ?? 'duo-gemini'
-  const history = geminiSessionHistory.get(sessionId) ?? []
+  // 只有调用方提供明确 sessionId 才启用多轮历史。stdio MCP 并不保证携带 sessionId，
+  // 缺省时必须保持无状态，避免不同客户端/对话复用同一进程时互相泄露图片和上下文。
+  const sessionId = input.sessionId?.trim() || undefined
+  const history = sessionId ? (geminiSessionHistory.get(sessionId) ?? []) : []
 
   // 参考图：引擎已读取为 ReferenceFile，转成 Gemini inlineData parts
   const referenceImageParts: GeminiPart[] = references.map((r) => ({
@@ -1901,7 +2111,7 @@ async function callGeminiImageApi(
   const imageSize = input.imageSize?.trim() || input.config.preset?.defaultImageSize || undefined
 
   const requestBody = buildGeminiRequest(input.prompt, referenceImageParts, history, aspectRatio, imageSize)
-  const target = await buildGoogleGenerateContentRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model })
+  const target = await buildGoogleGenerateContentRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model, signal: input.signal })
 
   const response = await fetchFn(target.url, {
     method: 'POST',
@@ -1953,19 +2163,15 @@ async function callGeminiImageApi(
     throw new Error(`Gemini 未生成图片${reason ? `（finishReason: ${reason}）` : ''}${textHint}`)
   }
 
-  // 更新多轮历史（保留原始 parts 含 thoughtSignature）
-  const userContent: GeminiContent = { role: 'user', parts: [...referenceImageParts, { text: input.prompt }] }
-  const modelContent: GeminiContent = { role: 'model', parts }
-  const updatedHistory = [...history, userContent, modelContent]
-  // 自动清理：单会话历史超 40 条 content（约 20 轮对话）时，保留最近 40 条，
-  // 避免长驻进程的 geminiSessionHistory 无限增长（含 base64 图片内存占用大）。
-  const MAX_GEMINI_HISTORY = 40
-  geminiSessionHistory.delete(sessionId) // 重插以更新会话新鲜度（LRU）
-  evictOldestIfNeeded(geminiSessionHistory)
-  geminiSessionHistory.set(
-    sessionId,
-    updatedHistory.length > MAX_GEMINI_HISTORY ? updatedHistory.slice(-MAX_GEMINI_HISTORY) : updatedHistory,
-  )
+  if (sessionId) {
+    // 更新多轮历史（保留原始 parts 含 thoughtSignature），同时限制会话数、轮数和估算字节数。
+    const userContent: GeminiContent = { role: 'user', parts: [...referenceImageParts, { text: input.prompt }] }
+    const modelContent: GeminiContent = { role: 'model', parts }
+    geminiSessionHistory.delete(sessionId) // 重插以更新会话新鲜度（LRU）
+    evictOldestIfNeeded(geminiSessionHistory, MAX_GEMINI_SESSIONS)
+    const trimmedHistory = trimGeminiHistory([...history, userContent, modelContent])
+    if (trimmedHistory.length > 0) geminiSessionHistory.set(sessionId, trimmedHistory)
+  }
 
   return { images: selectedImages, text: textParts.length > 0 ? textParts.join('\n') : undefined }
 }
@@ -2375,7 +2581,10 @@ async function callDashscopeVideoApi(input: GenerateMediaInput, fetchFn: typeof 
       media.push(buildImageItem('first_frame', imageRefs[0]))
     }
     if (isWan27 && input.lastFramePath) {
-      const lastFrame = readReferenceFiles([input.lastFramePath], input.cwd).find((ref) => ref.mediaType.startsWith('image/'))
+      const lastFrame = readReferenceFiles(
+        [input.lastFramePath], input.cwd, input.allowedInputRoots,
+        input.maxInputBytes, input.referenceReadBudget,
+      ).find((ref) => ref.mediaType.startsWith('image/'))
       if (!lastFrame) throw new Error('已提供 lastFrameImagePath，但没有可用图片文件')
       media.push(buildImageItem('last_frame', lastFrame))
     }
@@ -2419,6 +2628,27 @@ const DASHSCOPE_FAILURE_TASK_STATUSES = new Set([
   'FAILED', 'FAILURE', 'CANCELED', 'CANCELLED', 'ABORTED', 'TIMEOUT', 'TIMED_OUT',
   'STOPPED', 'REJECTED', 'ERROR', 'UNKNOWN',
 ])
+
+/**
+ * 统一处理非 dashscope 轮询器的"既非成功也非失败"状态：只有命中已知活跃状态才继续，
+ * 缺失或无法识别的状态一律立即抛错，避免上游协议变化导致空轮询到硬超时（与
+ * pollTask / H3 轮询器约定一致）。成功与失败的判定（及其各自的错误消息）仍由各轮询器
+ * 在调用本函数前自行处理。
+ */
+function assertKnownActivePollStatus(
+  status: string | undefined,
+  activeStatuses: readonly string[],
+  label: string,
+  taskId?: string,
+): void {
+  const normalized = typeof status === 'string' ? status.trim() : ''
+  if (!normalized) {
+    throw new Error(`${label} 查询响应缺少状态字段${taskId ? `: task_id=${taskId}` : ''}`)
+  }
+  if (!activeStatuses.some((active) => active.toLowerCase() === normalized.toLowerCase())) {
+    throw new Error(`${label} 返回未知任务状态 (${status})${taskId ? `: task_id=${taskId}` : ''}`)
+  }
+}
 
 /** 通用 dashscope 任务轮询 */
 async function pollTask(
@@ -2656,7 +2886,7 @@ async function callVolcenginePlanTtsApi(
   input: GenerateMediaInput,
   fetchFn: typeof globalThis.fetch,
 ): Promise<GenerateMediaOutput> {
-  const { baseUrl, model } = input.config
+  const { baseUrl } = input.config
   if (!baseUrl) throw new Error('volcengine-plan-tts 缺少 baseUrl')
   const audioFormat = input.audioFormat ?? 'mp3'
   const body = {
@@ -2818,6 +3048,7 @@ async function callVolcengineVideoApi(input: GenerateMediaInput, fetchFn: typeof
       return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
     }
     if (body.status === 'failed') throw new Error(`Seedance 失败: ${body.error?.message ?? '未知错误'}`)
+    assertKnownActivePollStatus(body.status, ['queued', 'processing', 'running', 'pending'], 'Seedance', taskId)
   }
 }
 
@@ -2845,18 +3076,7 @@ async function callKlingVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
   if (input.mode) body.mode = input.mode
   if (input.guidanceScale !== undefined) body.cfg_scale = input.guidanceScale
   if (input.cameraFixed !== undefined) body.camera_control = { type: input.cameraFixed ? 'fixed' : 'none' }
-  let authHeader = `Bearer ${input.apiKey}`
-  if (input.apiKey.includes(':')) {
-    const [ak, sk] = input.apiKey.split(':')
-    if (ak && sk) {
-      try {
-        const token = generateKlingJwt(ak.trim(), sk.trim())
-        authHeader = `Bearer ${token}`
-      } catch (err) {
-        console.error('[Kling Auth] JWT Generation failed:', err)
-      }
-    }
-  }
+  let authHeader = buildKlingAuthHeader(input.apiKey)
 
   const submitRes = await fetchFn(`${baseUrl}/v1/videos/${ref ? 'image2video' : 'text2video'}`, {
     method: 'POST',
@@ -2877,18 +3097,7 @@ async function callKlingVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
     if (Date.now() > deadline) throw new Error(`可灵轮询超时: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
     
-    let currentAuthHeader = `Bearer ${input.apiKey}`
-    if (input.apiKey.includes(':')) {
-      const [ak, sk] = input.apiKey.split(':')
-      if (ak && sk) {
-        try {
-          const token = generateKlingJwt(ak.trim(), sk.trim())
-          currentAuthHeader = `Bearer ${token}`
-        } catch (err) {
-          console.error('[Kling Auth] JWT Generation failed:', err)
-        }
-      }
-    }
+    const currentAuthHeader = buildKlingAuthHeader(input.apiKey)
 
     const res = await fetchFn(`${baseUrl}/v1/videos/${ref ? 'image2video' : 'text2video'}/${taskId}`, {
       method: 'GET', headers: { Authorization: currentAuthHeader }, signal: input.signal,
@@ -2905,6 +3114,7 @@ async function callKlingVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
       return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
     }
     if (status === 'failed') throw new Error(`可灵失败: ${body.message ?? '未知错误'}`)
+    assertKnownActivePollStatus(status, ['submitted', 'processing', 'running'], '可灵', taskId)
   }
 }
 
@@ -2935,6 +3145,23 @@ function generateKlingJwt(ak: string, sk: string): string {
   const signaturePart = base64Url(hmac.digest())
   
   return `${headerPart}.${payloadPart}.${signaturePart}`
+}
+
+/**
+ * 构造可灵鉴权头。ak:sk 形式的凭据必须签发 JWT；JWT 失败直接抛错而非回退成
+ * `Bearer ak:sk`——后者既无法通过可灵鉴权，又会把完整凭据当 token 发出，
+ * 一旦上游或中间网关在错误响应里回显请求头，凭据就会被间接外泄。
+ */
+function buildKlingAuthHeader(apiKey: string): string {
+  if (!apiKey.includes(':')) return `Bearer ${apiKey}`
+  const [ak, sk] = apiKey.split(':')
+  const trimmedAk = ak?.trim()
+  const trimmedSk = sk?.trim()
+  if (!trimmedAk || !trimmedSk) {
+    // 畸形 ak:sk（如 ":sk"/"ak:"）不应回退成明文 Bearer——那会把 sk 当 token 发出。
+    throw new Error('可灵 ak:sk 凭据格式无效：ak 与 sk 均不能为空')
+  }
+  return `Bearer ${generateKlingJwt(trimmedAk, trimmedSk)}`
 }
 
 // ===== 协议族：zhipu-async（CogVideoX 视频 / GLM-TTS / GLM-TTS-Clone） =====
@@ -3022,6 +3249,7 @@ async function callZhipuVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
       return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
     }
     if (body.task_status === 'FAIL') throw new Error(`智谱视频失败: ${body.message ?? '未知错误'}`)
+    assertKnownActivePollStatus(body.task_status, ['PROCESSING'], '智谱视频', taskId)
   }
 }
 
@@ -3059,8 +3287,7 @@ async function callZhipuTtsApi(input: GenerateMediaInput, fetchFn: typeof global
     if (data) return { images: [{ mediaType: audioMimeForFormat(audioFormat), data }] }
     throw new Error('GLM-TTS 未返回音频数据')
   }
-  const arrayBuffer = await res.arrayBuffer()
-  return { images: [{ mediaType: contentType || audioMimeForFormat(audioFormat), data: Buffer.from(arrayBuffer).toString('base64') }] }
+  return { images: [{ mediaType: contentType || audioMimeForFormat(audioFormat), data: await responseBodyToBase64(res) }] }
 }
 
 async function uploadZhipuVoiceCloneFile(
@@ -3214,7 +3441,8 @@ async function callMinimaxVideoApi(input: GenerateMediaInput, fetchFn: typeof gl
     const body = (await safeParseJson(res, 'MiniMax 视频查询')) as {
       status?: string; file_id?: string; videos?: Array<{ url?: string }>; base_resp?: { status_msg?: string }
     }
-    if (body.status === 'Success') {
+    const lowerStatus = typeof body.status === 'string' ? body.status.trim().toLowerCase() : ''
+    if (lowerStatus === 'success') {
       const videoUrl = body.videos?.[0]?.url
       if (!videoUrl && body.file_id) {
         const retrievedUrl = await retrieveMinimaxFileDownloadUrl(baseUrl, input.apiKey, body.file_id, fetchFn, input.signal)
@@ -3223,7 +3451,8 @@ async function callMinimaxVideoApi(input: GenerateMediaInput, fetchFn: typeof gl
       if (!videoUrl) throw new Error('MiniMax 视频成功但未返回 URL 或 file_id')
       return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
     }
-    if (body.status === 'Failed' || body.status === 'Fail') throw new Error(`MiniMax 视频失败: ${body.base_resp?.status_msg ?? '未知错误'}`)
+    if (lowerStatus === 'failed' || lowerStatus === 'fail') throw new Error(`MiniMax 视频失败: ${body.base_resp?.status_msg ?? '未知错误'}`)
+    assertKnownActivePollStatus(body.status, ['preparing', 'queuing', 'processing'], 'MiniMax 视频', taskId)
   }
 }
 
@@ -3407,14 +3636,8 @@ async function callMinimaxVideoV2Api(
     if (status === 'failed' || status === 'cancelled') {
       throw new Error(`MiniMax H3 视频失败: ${queryBody.task?.error?.message ?? status}`)
     }
-    // 未知/缺失状态不应静默轮询到硬超时：与 DashScope 轮询器约定一致，暴露协议变化。
-    if (!status) {
-      throw new Error(`MiniMax H3 视频查询缺少 task.status: task_id=${taskId}`)
-    }
-    if (status !== 'queued' && status !== 'running') {
-      throw new Error(`MiniMax H3 视频返回未知任务状态 (${status}): task_id=${taskId}`)
-    }
-    // queued / running 继续轮询
+    // queued / running 继续轮询；缺失/未知状态立即报错（与 pollTask 等全部轮询器约定一致）。
+    assertKnownActivePollStatus(status, ['queued', 'running'], 'MiniMax H3 视频', taskId)
   }
 }
 
@@ -3609,10 +3832,15 @@ async function callMinimaxAsyncTtsApi(input: GenerateMediaInput, fetchFn: typeof
     if (queryBody.status === 'Failed' || queryBody.status === 'Fail' || queryBody.status === 'failed') {
       throw new Error(`MiniMax 异步 TTS 失败: ${queryBody.base_resp?.status_msg ?? '未知错误'}`)
     }
+    assertKnownActivePollStatus(queryBody.status, ['processing', 'queuing'], 'MiniMax 异步 TTS', String(taskId))
   }
 }
 
-async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof globalThis.fetch): Promise<GenerateMediaOutput> {
+async function callMinimaxMusicApi(
+  input: GenerateMediaInput,
+  fetchFn: typeof globalThis.fetch,
+  references: ReferenceFile[] = [],
+): Promise<GenerateMediaOutput> {
   const { baseUrl, model } = input.config
   if (!baseUrl) throw new Error('minimax 缺少 baseUrl')
 
@@ -3623,7 +3851,7 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
   try {
     let coverFeatureId = input.coverFeatureId
     let lyrics = input.lyrics
-    const reference = input.referencePaths?.[0] ? readReferenceFiles([input.referencePaths[0]], input.cwd)[0] : undefined
+    const reference = references[0]
     if (/^music-cover(?:-|$)/.test(model) && !coverFeatureId && reference) {
       const preprocessRes = await fetchFn(`${baseUrl}/music_cover_preprocess`, {
         method: 'POST',
@@ -3714,7 +3942,10 @@ async function callMinimaxMusicApi(input: GenerateMediaInput, fetchFn: typeof gl
       }
     }
     if (audio) {
-      return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: base64FromHexAudioPayload(audio, 'MiniMax 音乐生成') }] }
+      // music-2.6 历史返回 hex 音频串；music-3.0 / 第三方网关可能返回 base64。
+      // 用自适应解码：先按已知音频 magic 识别 hex，否则原样当 base64，避免硬性
+      // hex 校验在编码变化时直接丢弃已计费的生成物。
+      return { images: [{ mediaType: audioMimeForFormat(audioFormat), data: base64FromMinimaxAudioPayload(audio, audioFormat) }] }
     }
     throw new Error(`MiniMax 音乐生成未返回音频: ${responseBody.base_resp?.status_msg ?? '未知错误'}`)
   } catch (err) {
@@ -3936,8 +4167,20 @@ async function callMidjourneyApi(input: GenerateMediaInput, fetchFn: typeof glob
     if (body.status === 'FAILURE') {
       throw new Error(`Midjourney 生成失败: ${body.failReason ?? body.errorMessage ?? '未知错误'}`)
     }
-  // NOT_START / SUBMITTED / IN_PROGRESS 继续轮询
+    // NOT_START / SUBMITTED / IN_PROGRESS 继续轮询；其它缺失或未知状态立即抛错。
+    assertKnownActivePollStatus(body.status, ['NOT_START', 'SUBMITTED', 'IN_PROGRESS'], 'Midjourney', taskId)
   }
+}
+
+/** 腾讯混元 Maas 轮询接口的 data 字段会因模型/网关版本而返回对象或对象数组。 */
+interface TencentHunyuanMaaSTaskData {
+  status?: string
+  state?: string
+  images?: Array<{ url?: string }>
+  image_url?: string
+  videos?: Array<{ url?: string }>
+  video_url?: string
+  url?: string
 }
 
 async function callTencentHunyuanAsyncApi(
@@ -4028,28 +4271,37 @@ async function callTencentHunyuanAsyncApi(
       videos?: Array<{ url?: string }>
       video_url?: string
       error?: { message?: string }
-      data?: any // Can be object or array
+      data?: TencentHunyuanMaaSTaskData | TencentHunyuanMaaSTaskData[]
     }
-    const status = String(body.status ?? body.state ?? (typeof body.data === 'object' && body.data !== null && !Array.isArray(body.data) ? (body.data.status ?? body.data.state) : '') ?? '').toUpperCase()
+    const dataObject = Array.isArray(body.data) ? undefined : body.data
+    const dataArray = Array.isArray(body.data) ? body.data : undefined
+    const firstDataItem = dataArray?.[0]
+    const status = String(
+      body.status ?? body.state ?? dataObject?.status ?? dataObject?.state ?? firstDataItem?.status ?? firstDataItem?.state ?? '',
+    ).toUpperCase()
     if (status === 'SUCCEEDED' || status === 'SUCCESS' || status === 'COMPLETED' || status.includes('SUCC') || status.includes('COMP')) {
       if (isVideo) {
-        const videoUrl = body.videos?.[0]?.url ?? 
-                         body.video_url ?? 
-                         body.url ?? 
-                         (Array.isArray(body.data) ? (body.data[0]?.video_url ?? body.data[0]?.url) : undefined) ??
-                         body.data?.videos?.[0]?.url ?? 
-                         body.data?.video_url ?? 
-                         body.data?.url
+        const videoUrl = body.videos?.[0]?.url ??
+                         body.video_url ??
+                         body.url ??
+                         firstDataItem?.videos?.[0]?.url ??
+                         firstDataItem?.video_url ??
+                         firstDataItem?.url ??
+                         dataObject?.videos?.[0]?.url ??
+                         dataObject?.video_url ??
+                         dataObject?.url
         if (!videoUrl) throw new Error('腾讯混元 Maas 成功但未返回视频 URL')
         return { images: [await downloadAsBase64(videoUrl, fetchFn, input.signal, 'video/mp4')] }
       } else {
-        const imageUrl = body.images?.[0]?.url ?? 
-                         body.image_url ?? 
-                         body.url ?? 
-                         (Array.isArray(body.data) ? body.data[0]?.url : undefined) ??
-                         body.data?.images?.[0]?.url ?? 
-                         body.data?.image_url ?? 
-                         body.data?.url
+        const imageUrl = body.images?.[0]?.url ??
+                         body.image_url ??
+                         body.url ??
+                         firstDataItem?.images?.[0]?.url ??
+                         firstDataItem?.image_url ??
+                         firstDataItem?.url ??
+                         dataObject?.images?.[0]?.url ??
+                         dataObject?.image_url ??
+                         dataObject?.url
         if (!imageUrl) throw new Error('腾讯混元 Maas 成功但未返回图像 URL')
         return { images: [await downloadAsBase64(imageUrl, fetchFn, input.signal, 'image/png')] }
       }
@@ -4058,6 +4310,7 @@ async function callTencentHunyuanAsyncApi(
       const errorMsg = body.error?.message ?? body.message ?? '未知错误'
       throw new Error(`腾讯混元 Maas 失败: ${errorMsg}`)
     }
+    assertKnownActivePollStatus(status, ['RUNNING', 'PENDING', 'PROCESSING', 'QUEUED', 'QUEUING', 'SUBMITTED', 'WAITING', 'NOT_START', 'STARTING'], '腾讯混元 Maas', id)
   }
 }
 
@@ -4263,9 +4516,9 @@ async function callGoogleInteractionsVideoApi(
   if (isGoogleOmniModel(model)) return callGoogleOmniVideoApi(input, fetchFn, references)
 
   const imageRefs = references.filter((ref) => ref.mediaType.startsWith('image/'))
-  const lastFrameRefs = input.lastFramePath ? readReferenceFiles([input.lastFramePath], input.cwd).filter((ref) => ref.mediaType.startsWith('image/')) : []
+  const lastFrameRefs = input.lastFramePath ? readReferenceFiles([input.lastFramePath], input.cwd, input.allowedInputRoots, input.maxInputBytes, input.referenceReadBudget).filter((ref) => ref.mediaType.startsWith('image/')) : []
   if (input.lastFramePath && lastFrameRefs.length === 0) throw new Error('已提供 Veo lastFrameImagePath，但没有可用图片文件')
-  const videoRefs = input.videoPath ? readReferenceFiles([input.videoPath], input.cwd).filter((ref) => ref.mediaType.startsWith('video/')) : []
+  const videoRefs = input.videoPath ? readReferenceFiles([input.videoPath], input.cwd, input.allowedInputRoots, input.maxInputBytes, input.referenceReadBudget).filter((ref) => ref.mediaType.startsWith('video/')) : []
   if (input.videoPath && videoRefs.length === 0) throw new Error('已提供 Veo videoPath，但没有可用视频文件')
   const hasVideoExtension = videoRefs.length > 0
   const hasReferenceImages = imageRefs.length > 0 && (input.referenceMode === 'reference' || !!input.referenceType)
@@ -4313,14 +4566,14 @@ async function callGoogleInteractionsVideoApi(
     throw new Error('Veo 视频扩展仅支持 720p 分辨率，请把 resolution 设为 720p')
   }
   if (hasVideoExtension && !resolution) resolution = '720p'
-  const requestedVideoCount = input.numberOfImages ?? 1
+  const requestedVideoCount = input.numberOfVideos ?? input.numberOfImages ?? 1
   if (requestedVideoCount !== 1) {
     throw new Error('Veo 当前每次请求只支持生成 1 条视频，请把 numberOfVideos 设为 1')
   }
   const mustUseEightSeconds = resolution === '1080p' || resolution === '4k' || hasVideoExtension || hasReferenceImages || hasLastFrame
   const durationSeconds = resolveVeoDurationSeconds(resolveRequestedVeoDuration(input), mustUseEightSeconds)
   const parameters: Record<string, unknown> = { aspectRatio }
-  if (input.numberOfImages !== undefined) parameters.numberOfVideos = requestedVideoCount
+  if (input.numberOfVideos !== undefined || input.numberOfImages !== undefined) parameters.numberOfVideos = requestedVideoCount
   if (durationSeconds !== undefined) parameters.durationSeconds = durationSeconds
   if (resolution) parameters.resolution = resolution
   if (input.seed !== undefined) parameters.seed = input.seed
@@ -4331,7 +4584,7 @@ async function callGoogleInteractionsVideoApi(
   }
 
   const submitBody = { instances: [instance], parameters }
-  const target = await buildGooglePredictLongRunningRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model })
+  const target = await buildGooglePredictLongRunningRequestTarget({ rawCredential: apiKey, baseUrl, modelId: model, signal: input.signal })
   const submitRes = await fetchFn(target.url, {
     method: 'POST',
     headers: target.headers,
@@ -4423,15 +4676,15 @@ async function callGoogleOmniVideoApi(
     throw new Error('Google Cloud Service (Vertex) 视频当前仅支持 gemini-omni-flash-preview')
   }
 
-  const sessionId = input.sessionId ?? 'google-omni'
+  const sessionId = input.sessionId?.trim() || undefined
   const requestBody: Record<string, unknown> = {
     model,
     input: buildGoogleOmniInput(input.prompt, references),
   }
-  const previousInteractionId = googleOmniInteractionHistory.get(sessionId)
+  const previousInteractionId = sessionId ? googleOmniInteractionHistory.get(sessionId) : undefined
   if (previousInteractionId) requestBody.previous_interaction_id = previousInteractionId
 
-  const target = await buildGoogleInteractionsRequestTarget({ rawCredential: apiKey, baseUrl })
+  const target = await buildGoogleInteractionsRequestTarget({ rawCredential: apiKey, baseUrl, signal: input.signal })
   const res = await fetchFn(target.url, {
     method: 'POST',
     headers: target.headers,
@@ -4446,7 +4699,7 @@ async function callGoogleOmniVideoApi(
   if (body.error) throw new Error(`Google Omni 视频生成失败: ${body.error.message ?? body.error.status ?? '未知错误'}`)
 
   const interactionId = body.id ?? body.name
-  if (interactionId) {
+  if (interactionId && sessionId) {
     googleOmniInteractionHistory.delete(sessionId) // 重插以更新会话新鲜度（LRU）
     evictOldestIfNeeded(googleOmniInteractionHistory)
     googleOmniInteractionHistory.set(sessionId, interactionId)

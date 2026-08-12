@@ -1,10 +1,31 @@
 import { describe, expect, test } from 'bun:test'
-import { isLoopbackAuthority, maskApiKey, mergeConfigPreservingMaskedKeys, resolveGeneratedMediaDir, resolveTestCredentials, validateLocalApiRequest } from './server'
+import { isLoopbackAuthority, maskApiKey, mergeConfigPreservingMaskedKeys, parseApiRequestUrl, resolveGeneratedMediaDir, resolveTestCredentials, STATIC_ASSET_CACHE_CONTROL, validateConfigPayload, validateLocalApiRequest, validateTestRequestPayload } from './server'
+import { resolveModalityApiKey } from '../config'
+import { WEBUI_HTML } from './index-html'
 
 describe('webui server · output path', () => {
   test('always treats configured outputDir as a root, including roots named generated-media', () => {
     expect(resolveGeneratedMediaDir('/tmp/output')).toBe('/tmp/output/generated-media')
     expect(resolveGeneratedMediaDir('/tmp/generated-media')).toBe('/tmp/generated-media/generated-media')
+  })
+})
+
+describe('webui server · browser asset and readiness rendering', () => {
+  test('revalidates the fixed Alpine.js asset URL after application upgrades', () => {
+    expect(STATIC_ASSET_CACHE_CONTROL).toBe('no-cache')
+  })
+
+  test('matches API routes by exact pathname while preserving query parameters', () => {
+    const exportUrl = parseApiRequestUrl('/api/export?agent=cursor')
+    expect(exportUrl?.pathname).toBe('/api/export')
+    expect(exportUrl?.searchParams.get('agent')).toBe('cursor')
+    expect(parseApiRequestUrl('/api/export-anything')?.pathname).not.toBe('/api/export')
+  })
+
+  test('renders channel readiness from the server status, including apiKeyEnv-backed channels', () => {
+    expect(WEBUI_HTML).toContain(':class="isReady(m.key) && \'live\'"')
+    expect(WEBUI_HTML).toContain('x-text="isReady(m.key) ? t.statusLive : t.statusIdle"')
+    expect(WEBUI_HTML).not.toContain("config[m.key]?.enabled && config[m.key]?.apiKey && 'live'")
   })
 })
 
@@ -37,6 +58,20 @@ describe('webui server · local API guard', () => {
       secFetchSite: 'same-origin',
       contentType: 'text/plain',
     })).toContain('application/json')
+    expect(validateLocalApiRequest({
+      method: 'POST',
+      host: 'localhost:17899',
+      origin: 'http://localhost:17899',
+      secFetchSite: 'same-origin',
+      contentType: 'text/application/json',
+    })).toContain('application/json')
+    expect(validateLocalApiRequest({
+      method: 'POST',
+      host: 'localhost:17899',
+      origin: 'http://localhost:17899',
+      secFetchSite: 'same-origin',
+      contentType: 'application/problem+json',
+    })).toBeNull()
   })
 
   test('only loopback authorities are allowed', () => {
@@ -44,6 +79,39 @@ describe('webui server · local API guard', () => {
     expect(isLoopbackAuthority('localhost:17899')).toBe(true)
     expect(isLoopbackAuthority('0.0.0.0:17899')).toBe(false)
     expect(isLoopbackAuthority('example.com')).toBe(false)
+  })
+})
+
+describe('webui server · config payload validation', () => {
+  test('accepts policy/env-key config and rejects destructive wrong field types', () => {
+    expect(validateConfigPayload({
+      image: { enabled: true, presetId: 'custom', apiKey: '', apiKeyEnv: 'OPENAI_API_KEY' },
+      policy: { maxOutputs: 2, maxInputMiB: 128, allow4k: false, allowedInputDirs: ['/tmp/assets'] },
+      diagnostics: { enabled: true, logFile: '/tmp/diag.jsonl' },
+    })).toBeNull()
+    expect(validateConfigPayload({ image: { enabled: 'yes' } })).toContain('enabled')
+    expect(validateConfigPayload({ policy: { allowedInputDirs: '/tmp/assets' } })).toContain('字符串数组')
+    expect(validateConfigPayload({ image: { protocol: 'fake-protocol' } })).toContain('protocol')
+    expect(validateConfigPayload({ image: { protocol: 'kling-async' } })).toContain('不兼容')
+    expect(validateConfigPayload({ image: { apiKeyEnv: 'BAD-NAME' } })).toContain('环境变量')
+    expect(validateConfigPayload({ policy: { maxOutputs: 2.5 } })).toContain('整数')
+    expect(validateConfigPayload({ policy: { maxInputMiB: 0 } })).toContain('1-2048')
+    expect(validateConfigPayload({ policy: { allowedInputDirs: ['relative/path'] } })).toContain('绝对路径')
+    expect(validateConfigPayload(JSON.parse('{"image":{"apiKeyByVendor":{"__proto__":"bad"}}}'))).toContain('不安全的键名')
+    expect(validateConfigPayload({ outputDir: 'relative/path' })).toContain('绝对路径')
+    expect(validateConfigPayload({ outputDir: '/abs/output' })).toBeNull()
+  })
+})
+
+describe('webui server · playground payload validation', () => {
+  test('rejects malformed fields before any provider dispatch', () => {
+    expect(validateTestRequestPayload({ modality: 'image', prompt: 'cat', numberOfImages: 1 })).toBeNull()
+    expect(validateTestRequestPayload(null)).toContain('JSON 对象')
+    expect(validateTestRequestPayload({ modality: 'image', prompt: 'cat', numberOfImages: '4' })).toContain('正整数')
+    expect(validateTestRequestPayload({ modality: 'video', prompt: 'clip', duration: Number.NaN })).toContain('有限数字')
+    expect(validateTestRequestPayload({ modality: 'audio', prompt: 'voice', referencePaths: '/tmp/a.wav' })).toContain('字符串数组')
+    expect(validateTestRequestPayload({ modality: 'image', prompt: 'cat', protocol: 'fake' })).toContain('protocol')
+    expect(validateTestRequestPayload({ modality: 'image', prompt: 'cat', apiKeyEnv: 'BAD-NAME' })).toContain('环境变量')
   })
 })
 
@@ -70,6 +138,28 @@ describe('webui server · API key merge', () => {
 
     expect(merged.image?.apiKey).toBe('real-google-key')
     expect(merged.image?.apiKeyByVendor?.['Google Gemini']).toBe('real-google-key')
+  })
+
+  test('跨 vendor 切换且目标 vendor 无记忆时，不把旧 vendor 的顶层 key 错配到新 vendor', () => {
+    const merged = mergeConfigPreservingMaskedKeys(
+      {
+        image: {
+          enabled: true,
+          presetId: 'vendor-a-preset',
+          apiKey: 'old-vendor-a-key',
+        },
+      },
+      {
+        image: {
+          enabled: true,
+          // 切到一个完全不同的 vendor，前端只回传了脱敏占位顶层 key，未回传目标 vendor 的脱敏 key。
+          presetId: 'vendor-b-preset',
+          apiKey: 'old****-a-key',
+        },
+      },
+    )
+    // 目标 vendor 无记忆：顶层应清空，而不是把旧 vendor-a 的 key 残留/错配到 vendor-b。
+    expect(merged.image?.apiKey).toBe('')
   })
 
   test('keeps modality key memories independent even when vendor names match', () => {
@@ -163,6 +253,49 @@ describe('webui server · API key merge', () => {
 })
 
 describe('webui server · playground credentials', () => {
+  test('uses the page environment variable before autosave completes', () => {
+    const envName = 'PRISMSTUDIO_TEST_PAGE_KEY'
+    const previous = process.env[envName]
+    process.env[envName] = 'page-env-secret'
+    try {
+      const credentials = resolveTestCredentials({
+        modality: 'image', prompt: 'cat', presetId: 'gemini-pro-image',
+        model: 'gemini-3-pro-image-preview', protocol: 'gemini-generate-content',
+        baseUrl: 'https://proxy.example.com', apiKeyEnv: envName,
+      }, {})
+      expect(credentials.apiKey).toBe('page-env-secret')
+    } finally {
+      if (previous === undefined) delete process.env[envName]
+      else process.env[envName] = previous
+    }
+  })
+
+  test('uses the same stored inline key as the formal runtime when a page env key also exists', () => {
+    const envName = 'PRISMSTUDIO_TEST_PAGE_KEY'
+    const previous = process.env[envName]
+    process.env[envName] = 'page-env-secret'
+    const stored = {
+      enabled: true,
+      presetId: 'gemini-pro-image',
+      apiKey: 'stored-inline-secret',
+    }
+    try {
+      const credentials = resolveTestCredentials({
+        modality: 'image', prompt: 'cat', presetId: 'gemini-pro-image',
+        model: 'gemini-3-pro-image-preview', protocol: 'gemini-generate-content',
+        baseUrl: 'https://proxy.example.com', apiKeyEnv: envName,
+      }, { image: stored })
+
+      // `resolveModalityApiKey` is the formal MCP runtime's selector. The
+      // playground must not dispatch a paid request with a different key.
+      expect(credentials.apiKey).toBe(resolveModalityApiKey(stored))
+      expect(credentials.apiKey).toBe('stored-inline-secret')
+    } finally {
+      if (previous === undefined) delete process.env[envName]
+      else process.env[envName] = previous
+    }
+  })
+
   test('uses current page preset/protocol/baseUrl and the target vendor key before autosave completes', () => {
     const credentials = resolveTestCredentials({
       modality: 'image',
@@ -254,6 +387,15 @@ describe('webui server · playground credentials', () => {
     expect(merged.image?.apiKeyByVendor?.['Google Gemini']).toBe('real-google-key')
     // 空字符串 → 删除
     expect(merged.image?.apiKeyByVendor?.['Other Vendor']).toBeUndefined()
+  })
+
+  test('does not allow special map keys to mutate object prototypes', () => {
+    const merged = mergeConfigPreservingMaskedKeys(
+      {},
+      JSON.parse('{"image":{"enabled":false,"presetId":"custom","apiKey":"","apiKeyByVendor":{"__proto__":"polluted","safe":"value"}}}'),
+    )
+    expect(merged.image?.apiKeyByVendor).toEqual({ safe: 'value' })
+    expect(Object.prototype).not.toHaveProperty('polluted')
   })
 
   // 回归：maskApiKey 对非字符串（坏数据）不抛 TypeError，避免 GET /api/config 永久 500。

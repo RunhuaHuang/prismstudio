@@ -27,6 +27,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify npm lockfile is synchronized
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit
+          git diff --exit-code -- package-lock.json
+
       - name: Verify release version
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"

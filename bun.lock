@@ -19,7 +19,7 @@
     "@hono/node-server": ">=2.0.5",
     "fast-uri": ">=3.1.5",
     "hono": ">=4.12.34",
-    "ip-address": ">=10.3.0",
+    "ip-address": ">=10.4.0",
   },
   "packages": {
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.1", "", { "os": "aix", "cpu": "ppc64" }, "sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ=="],

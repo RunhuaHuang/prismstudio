@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeFilename, persistGenerated, extForMediaType } from './persist'
@@ -70,6 +70,7 @@ describe('persist · persistGenerated', () => {
 
       expect(readFileSync(res.savedPaths[0]!, 'utf-8')).toBe('fake-image1')
       expect(readFileSync(res.savedPaths[1]!, 'utf-8')).toBe('fake-image2')
+      if (process.platform !== 'win32') expect(statSync(res.savedPaths[0]!).mode & 0o777).toBe(0o600)
 
       // Check text block summary content
       const textBlock = res.content.find((c) => c.type === 'text')
@@ -97,9 +98,64 @@ describe('persist · persistGenerated', () => {
       expect(res.savedPaths[0]).toBe(join(cwd, 'custom-name-2.png'))
       expect(readFileSync(res.savedPaths[0]!, 'utf-8')).toBe('new-image')
       expect(readFileSync(outside, 'utf-8')).toBe('must-stay-unchanged')
+      expect(existsSync(join(cwd, 'custom-name.png'))).toBe(true)
     } finally {
       rmSync(cwd, { recursive: true, force: true })
       rmSync(outside, { force: true })
+    }
+  })
+
+  test('returns path only when media exceeds the inline byte limit', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prismstudio-persist-test-'))
+    try {
+      const generated = [{ mediaType: 'image/png', data: Buffer.from('large-image').toString('base64') }]
+      const res = persistGenerated(generated, '图片', { outputDir: cwd, maxInlineBytes: 1 })
+      expect(res.items[0]?.inlined).toBe(false)
+      expect(res.items[0]?.data).toBeUndefined()
+      expect(res.content.some((item) => item.type === 'image')).toBe(false)
+      expect(res.content.find((item) => item.type === 'text')?.text).toContain('仅返回本地路径')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('emergency-inlines image data when the output target cannot be written', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prismstudio-persist-failure-'))
+    const blockedOutput = join(dir, 'not-a-directory')
+    try {
+      // A regular file used as outputDir makes child creation fail reliably on
+      // every platform, without relying on root/permission semantics.
+      writeFileSync(blockedOutput, 'blocked')
+      const data = Buffer.from('paid-image-result').toString('base64')
+      const res = persistGenerated(
+        [{ mediaType: 'image/png', data }],
+        '图片',
+        { outputDir: blockedOutput, maxInlineBytes: 0 },
+      )
+
+      expect(res.savedPaths).toEqual([])
+      expect(res.items[0]).toMatchObject({ localPath: undefined, data, inlined: true, recoveredInline: true })
+      expect(res.content).toContainEqual({ type: 'image', data, mimeType: 'image/png' })
+      expect(res.content.find((item) => item.type === 'text')?.text).toContain('紧急以内联数据返回')
+      expect(readFileSync(blockedOutput, 'utf-8')).toBe('blocked')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('fails explicitly rather than pretending an unsaved video was generated', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prismstudio-persist-video-failure-'))
+    const blockedOutput = join(dir, 'not-a-directory')
+    try {
+      writeFileSync(blockedOutput, 'blocked')
+      expect(() => persistGenerated(
+        [{ mediaType: 'video/mp4', data: Buffer.from('paid-video-result').toString('base64') }],
+        '视频',
+        { outputDir: blockedOutput },
+      )).toThrow(/已由上游生成，但无法保存/)
+      expect(readFileSync(blockedOutput, 'utf-8')).toBe('blocked')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

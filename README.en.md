@@ -68,7 +68,10 @@ Zero-code wiring: the WebUI wizard copies a `mcpServers` JSON snippet in one cli
 - **Full multimodal coverage**: text-to-image, image editing, text-to-video, image-to-video, TTS, music generation, voice cloning
 - **Built-in WebUI**: config console + playground + wiring wizard in one — zero config, no hand-written JSON; API Key eye-toggle, full request URL and protocol shown at a glance
 - **Dynamic tool exposure**: only configured modalities expose their tool — no dead-shell tools
-- **Local-first**: credentials stored in plaintext at `~/.prismstudio/config.json`, WebUI binds only to `127.0.0.1`, nothing is ever uploaded
+- **Local runtime policy**: cap output count, video duration, 4K, and inline payload size before a paid request is sent
+- **Explicit input allowlist**: the output root is readable by default; additional reference directories must be approved
+- **Optional environment-backed keys**: store only an environment-variable name instead of the real API key
+- **Local-first**: credentials stored in plaintext at `~/.prismstudio/config.json`, WebUI binds only to `127.0.0.1`, no telemetry is sent; prompts, reference media, and generation requests go directly to the provider you configure
 
 ---
 
@@ -180,6 +183,7 @@ Your browser opens at `http://127.0.0.1:17899`. The WebUI is an **on-demand conf
 - It only occupies port `17899` while this command is running
 - When you close the terminal or press `Ctrl+C`, the WebUI stops and no longer uses memory / CPU
 - Your settings are saved locally in `~/.prismstudio/config.json` and are not lost when the WebUI stops
+- A running MCP server watches the config file; agents that support MCP `tools/list_changed` can refresh tools automatically, while older clients may still require a restart
 - Run the same command again whenever you need to switch models, update API keys, or test generation
 - After the initial setup, daily image / video / audio generation from your agent **does not require the WebUI to stay open**
 
@@ -271,7 +275,8 @@ prismstudio                       # Run as a stdio MCP server (default, for agen
 prismstudio webui                 # Launch the local WebUI console (same as --webui)
 prismstudio --webui               # Launch the local WebUI console (opens 127.0.0.1:<port>)
 prismstudio --webui --port 8080   # Custom WebUI port (default 17899)
-prismstudio --output-dir <path>   # Override the generated-media output directory
+prismstudio --output-dir <path>   # Override the output root (files go into its generated-media subdirectory)
+prismstudio diagnostics           # Print redacted readiness, policy, and adapter diagnostics
 prismstudio --version             # Show version
 prismstudio --help                # Show help
 ```
@@ -296,13 +301,17 @@ Only configured modalities expose their tool (dynamic exposure — no dead-shell
 
 Each tool accepts rich vendor-specific params (e.g. OpenAI `quality`/`background`, Gemini `aspectRatio`/`imageSize`, Stability `stylePreset`, video `withAudio`/`frames`). See each tool's `inputSchema` for the full list.
 
-**Generated artifacts** are saved to `<output-dir>/generated-media/`:
-- If you do not set `outputDir`, the default output directory is `~/.prismstudio/generated-media/`
-- Temporary WebUI playground outputs are saved to `~/.prismstudio/playground/` by default
-- Images / audio are also inlined as base64 back to the agent for immediate preview
-- Video is large, so only the local path is returned
+**Safe multi-turn editing:** for a continuous image or video refinement, reuse the same `sessionId` on every `generate_image` or `generate_video` call, for example `"sessionId": "image-edit-20260811-a"`. It must be a 1–128-character opaque identifier that starts with a letter or digit and then contains only letters, digits, dots, underscores, or hyphens. Do not put prompts, file paths, names, or API keys in it, and use a different ID for each conversation. Stdio MCP clients have no stable transport session ID, so they should pass this field explicitly; if it is omitted, Prismstudio will not automatically reuse the previous artifact or conversation history. The legacy `session_id` alias remains supported, but new integrations should use `sessionId`.
 
-> `~/.prismstudio` is a hidden folder under your home directory (the folder name starts with a dot). It stores the config file, default generated artifacts, and WebUI playground outputs.
+**Generated artifacts** are saved to `<output-dir>/generated-media/`:
+- If you do not set `outputDir`, the default output directory is `~/prismstudio/generated-media/`
+- Temporary WebUI playground outputs are saved to `~/prismstudio/playground/` by default
+- Images / audio are also inlined as base64 back to the agent for immediate preview
+- Decoded image/audio payloads above 8 MiB return a local path only by default
+- Video is large, so only the local path is returned
+- If the local output directory is temporarily unwritable, images/audio fall back to inline data so a paid result is not lost; an unsavable video fails explicitly instead of being reported as successful
+
+> `~/.prismstudio` is a hidden configuration folder under your home directory and stores only settings and credentials. Generated media defaults to the visible `~/prismstudio/` folder for easier access.
 
 **How to view hidden folders:**
 
@@ -326,21 +335,36 @@ Located at `~/.prismstudio/config.json` (override with `PRISMSTUDIO_CONFIG`):
     "enabled": true,
     "presetId": "openai-gpt-image-2",  // preset ID, or "custom"
     "apiKey": "sk-...",                  // stored in plaintext
+    "apiKeyEnv": "OPENAI_API_KEY",       // optional; used when apiKey is blank
     "model": "...",                      // optional, overrides preset (required for custom)
     "protocol": "openai-images",         // optional, only meaningful for custom
     "baseUrl": "..."                     // optional, overrides preset endpoint
   },
   "video": { /* ... */ },
   "audio": { /* ... */ },
-  "outputDir": "/path/to/out"           // optional, output directory
+  "outputDir": "/path/to/out",          // optional, output root directory
+  "policy": {
+    "maxOutputs": 4,
+    "maxVideoDurationSec": 15,
+    "allow4k": true,
+    "maxInlineMiB": 8,
+    "maxInputMiB": 128,
+    "allowedInputDirs": ["/path/to/assets"]
+  },
+  "diagnostics": {
+    "enabled": false,
+    "logFile": "/path/to/diagnostics.jsonl"
+  }
 }
 ```
+
+An inline `apiKey` takes precedence over `apiKeyEnv`. The agent process launching Prismstudio must inherit the named environment variable. `maxInputMiB` caps the combined local reference-image, audio, and video bytes read for one request. Prismstudio sends no telemetry; prompts, reference media, and generation requests are sent directly to the provider selected by the user. Diagnostics are designed to avoid recording prompts, credentials, reference paths, or output paths, and known request context is redacted before errors are persisted; logs rotate at 5 MiB.
 
 > **Per-vendor key memory**: each modality remembers API keys by vendor (stored in `apiKeyByVendor`, with backward compatibility for `apiKeyByPreset`). Switching models under the same vendor within one modality does not require re-entering the key; image / video / audio do not have to share keys.
 >
 > **Volcengine access groups**: due to different auth, Volcengine is split into three separate vendors in the config console: **Volcengine API** (standard Ark key), **Volcengine Agent Plan** (independent Agent Plan key), **Volcengine Speech** (speech service key). Each group remembers its own key without cross-overwriting.
 
-> **Security**: credentials are stored in plaintext (consistent with MCP ecosystem convention). The WebUI binds only to `127.0.0.1`, loads no third-party CDN scripts/fonts, and uses security headers plus Origin / Sec-Fetch-Site / JSON Content-Type checks to reduce local cross-site request risk. Manage file permissions yourself in production. See [SECURITY.md](SECURITY.md).
+> **Security**: credentials entered directly are stored in plaintext (consistent with MCP ecosystem convention); use `apiKeyEnv` to keep the real secret out of the config file. The WebUI binds only to `127.0.0.1`, loads no third-party CDN scripts/fonts, and uses security headers plus Origin / Sec-Fetch-Site / JSON Content-Type checks to reduce local cross-site request risk. See [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -358,6 +382,10 @@ bun run dev:webui        # WebUI mode
 bun run typecheck        # type check
 bun test                 # test suite
 bun run build            # build to dist/
+bun run check            # type check + full tests + build
+
+# Optional real-provider contract smoke; may incur cost and refuses to run without explicit opt-in
+PRISMSTUDIO_RUN_PAID_CONTRACT_TESTS=1 bun run contract:smoke -- image
 
 # Test the stdio handshake
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' | bun run dev
@@ -391,9 +419,11 @@ More in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Module | Responsibility |
 |---|---|
-| `src/engine/media-generation-engine.ts` | Generation core; dispatches by `modality × protocol`, raw `fetch` to each provider |
+| `src/engine/media-generation-engine.ts` | Generation core and protocol adapter registry; raw `fetch` to each provider |
 | `src/engine/google-auth.ts` | Google Vertex / Gemini service-account auth |
 | `src/config.ts` | Config read/write; converts structured config into flat credentials for the engine |
+| `src/policy.ts` | Pre-request cost and resource policy enforcement |
+| `src/diagnostics.ts` | Redacted JSONL diagnostics and log rotation |
 | `src/persist.ts` | Persist artifacts + build MCP content blocks (pure `node:fs`) |
 | `src/mcp-server.ts` | Low-level Server + JSON Schema tool registration; wires engine/config/persist |
 | `src/index.ts` | CLI entry; routes stdio vs `--webui` modes |
