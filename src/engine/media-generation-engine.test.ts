@@ -625,6 +625,20 @@ describe('media-generation-engine · 图像 stability', () => {
       fetchFn,
     })).rejects.toThrow(/未返回图片数据/)
   })
+
+  test('numberOfImages > 1 时串行发起多次请求而非静默只回一张', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { image: 'IMG1' } },
+      { ok: true, json: { image: 'IMG2' } },
+    ])
+    const r = await generateMedia({
+      modality: 'image', prompt: 'a cat', apiKey: 'sk-stab', numberOfImages: 2,
+      config: makeImageConfig({ modality: 'image', protocol: 'stability', baseUrl: 'https://api.stability.ai/v2beta/stable-image/generate', model: 'sdxl' }),
+      fetchFn,
+    })
+    expect(calls.length).toBe(2)
+    expect(r.images.map((i) => i.data)).toEqual(['IMG1', 'IMG2'])
+  })
 })
 
 // ===== 图像 midjourney（第三方 MJ 网关） =====
@@ -2440,7 +2454,9 @@ describe('media-generation-engine · 视频', () => {
       config: makeImageConfig({ modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-omni-flash-preview' }),
       fetchFn,
     })
-    expect(calls[0]!.url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions?key=google-key')
+    // API Key 只走 x-goog-api-key 头，绝不进 URL query（防代理/网关日志泄漏）。
+    expect(calls[0]!.url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions')
+    expect(calls[0]!.headers.get('x-goog-api-key')).toBe('google-key')
     expect(calls[0]!.method).toBe('POST')
     const body = JSON.parse(calls[0]!.body!)
     expect(body.model).toBe('gemini-omni-flash-preview')
@@ -2535,6 +2551,76 @@ describe('media-generation-engine · 视频', () => {
       config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
       fetchFn,
     })).rejects.toThrow('未知任务状态')
+  })
+
+  test('Seedance 轮询瞬时失败（502）退避重试后恢复，不放弃已提交任务', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: false, status: 502, text: 'bad gateway' },
+      { ok: false, status: 429, text: 'rate limited' },
+      { ok: true, json: { id: 'task-1', status: 'succeeded', content: { video_url: 'https://cdn.example.com/v.mp4' } } },
+      { ok: true, arrayBuffer: new ArrayBuffer(4) },
+    ])
+    const r = await generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })
+    expect(r.images.length).toBe(1)
+    // 5 次调用 = 1 提交 + 3 轮询（2 次瞬时失败 + 1 次成功）+ 1 次视频下载，说明瞬时错误被容忍而非放弃
+    expect(calls.length).toBe(5)
+  })
+
+  test('Seedance 轮询连续 3 次瞬时失败才报错，且错误保留 task_id', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-tolerant' } },
+      { ok: false, status: 502, text: 'bad gateway 1' },
+      { ok: false, status: 502, text: 'bad gateway 2' },
+      { ok: false, status: 503, text: 'unavailable' },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('task-tolerant')
+  })
+
+  test('Seedance 轮询 4xx 永久错误不重试立即抛出', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: false, status: 401, text: 'unauthorized' },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('401')
+    expect(calls.length).toBe(2)
+  })
+
+  test('Seedance duration 本地校验：非 5~12 整数秒直接抛错', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 7.5, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('整数秒')
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 20, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('5~12')
+    expect(calls.length).toBe(0)
+  })
+
+  test('可灵 duration 本地校验：仅允许 5 或 10 秒', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 3, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'kling-async', baseUrl: 'https://api.klingai.com', model: 'kling-v2' }),
+      fetchFn,
+    })).rejects.toThrow('5 或 10 秒')
+    expect(calls.length).toBe(0)
   })
 
   test('Seedance 轮询响应缺少状态字段立即报错', async () => {

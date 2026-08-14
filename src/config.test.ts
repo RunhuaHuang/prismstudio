@@ -75,6 +75,19 @@ describe('config · sensitive file permissions', () => {
 })
 
 describe('config · runtime normalization', () => {
+  test('解析失败的配置文件被备份为 .corrupt-<ts>，返回空配置', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prismstudio-config-test-'))
+    tempDirs.push(dir)
+    const path = join(dir, 'config.json')
+    process.env.PRISMSTUDIO_CONFIG = path
+    writeFileSync(path, '{ this is not valid json')
+
+    expect(loadConfig()).toEqual({})
+    const backups = readdirSync(dir).filter((name) => name.startsWith('config.json.corrupt-'))
+    expect(backups.length).toBe(1)
+    expect(readFileSync(join(dir, backups[0]!), 'utf-8')).toBe('{ this is not valid json')
+  })
+
   test('ignores malformed field types instead of crashing readiness checks', () => {
     const dir = mkdtempSync(join(tmpdir(), 'prismstudio-config-test-'))
     tempDirs.push(dir)

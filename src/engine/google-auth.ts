@@ -480,7 +480,7 @@ function resolveGoogleVertexInteractionsUrl(input: { baseUrl?: string; projectId
 
 // ===== Request Target Builder（媒体生成专用） =====
 
-/** Gemini Image generateContent 请求目标（API Key → ?key=；Vertex → OAuth Bearer） */
+/** Gemini Image generateContent 请求目标（API Key → x-goog-api-key 头；Vertex → OAuth Bearer） */
 export async function buildGoogleGenerateContentRequestTarget(input: {
   rawCredential: string
   baseUrl?: string
@@ -490,10 +490,11 @@ export async function buildGoogleGenerateContentRequestTarget(input: {
   const auth = await resolveGoogleUpstreamAuth(input.rawCredential, input.signal)
   if (auth.kind === 'api-key') {
     const root = normalizeGoogleGeminiApiRoot(input.baseUrl)
-    const url = new URL(`${root.replace(/\/+$/, '')}/v1beta/models/${encodeURIComponent(input.modelId)}:generateContent`)
-    url.searchParams.set('key', auth.apiKey)
+    // 只用 x-goog-api-key 头认证，不把 key 放进 URL query，
+    // 避免被代理/网关访问日志、客户端请求行日志持续复制泄漏。
+    const url = `${root.replace(/\/+$/, '')}/v1beta/models/${encodeURIComponent(input.modelId)}:generateContent`
     return {
-      url: url.toString(),
+      url,
       headers: { 'content-type': 'application/json', 'x-goog-api-key': auth.apiKey },
       authKind: auth.kind,
     }
@@ -540,10 +541,10 @@ export async function buildGoogleInteractionsRequestTarget(input: {
   const auth = await resolveGoogleUpstreamAuth(input.rawCredential, input.signal)
   if (auth.kind === 'api-key') {
     const root = normalizeGoogleGeminiApiRoot(input.baseUrl)
-    const url = new URL(`${root.replace(/\/+$/, '')}/v1beta/interactions`)
-    url.searchParams.set('key', auth.apiKey)
+    // 同 generateContent：仅用请求头认证，key 不进 URL。
+    const url = `${root.replace(/\/+$/, '')}/v1beta/interactions`
     return {
-      url: url.toString(),
+      url,
       headers: { 'content-type': 'application/json', 'x-goog-api-key': auth.apiKey },
       authKind: auth.kind,
     }

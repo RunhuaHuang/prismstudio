@@ -170,7 +170,7 @@ export function persistGenerated(
       savedPaths.push(written.fullPath)
     } catch (err) {
       persistenceFailed = true
-      console.warn(`[prismstudio] 写入文件失败 (${filename})：`, err)
+      console.warn(`[prismstudio] 写入文件失败（请求文件名 ${requestedFilename}，输出目录 ${options.outputDir}）：`, err)
     }
 
     const isInlineMedia = item.mediaType.startsWith('image/') || item.mediaType.startsWith('audio/')

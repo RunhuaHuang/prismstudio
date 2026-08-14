@@ -17,6 +17,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  copyFileSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -363,6 +364,15 @@ export function loadConfig(): DuoConfig {
     return normalizeConfig(parsed)
   } catch (err) {
     console.error(`[prismstudio] 配置文件解析失败 (${path})：`, err)
+    // 损坏的配置文件里可能还留着可手工找回的 API Key；先整体备份一份，
+    // 防止随后（WebUI 读到空配置后）保存任意一项就用近空配置覆盖原文件导致密钥永久丢失。
+    try {
+      const backupPath = `${path}.corrupt-${Date.now()}`
+      copyFileSync(path, backupPath)
+      console.error(`[prismstudio] 已将损坏的配置文件备份到 ${backupPath}，可手工修复后替换回来`)
+    } catch (backupErr) {
+      console.error('[prismstudio] 损坏配置备份失败：', backupErr)
+    }
     return { ...EMPTY_CONFIG }
   }
 }

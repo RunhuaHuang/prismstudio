@@ -1353,6 +1353,60 @@ const POLL_INTERVAL_MS = 5000
 const VIDEO_POLL_TIMEOUT_MS = 600000
 const IMAGE_POLL_TIMEOUT_MS = 300000
 const AUDIO_POLL_TIMEOUT_MS = 300000
+// Midjourney 经第三方网关排队（尤其 relax 模式）常超过普通图像轮询时长，单独放宽到 10 分钟。
+const MJ_POLL_TIMEOUT_MS = 600000
+
+/** 轮询查询连续多少次瞬时失败（429/5xx/网络错误）后才放弃整个任务。 */
+const POLL_TRANSIENT_FAILURE_LIMIT = 3
+const POLL_TRANSIENT_BACKOFF_MS = 2000
+const POLL_TRANSIENT_MAX_BACKOFF_MS = 10000
+
+/**
+ * 统一的异步任务轮询查询 fetch。
+ *
+ * 任务提交成功后即已进入厂商队列（通常已计费），轮询阶段的单次瞬时失败
+ * （429 限流、5xx 网关抖动、网络断连）不应导致整个已提交任务被放弃；
+ * 这里对瞬时错误做递增退避重试，连续失败达到上限才抛错，且错误信息保留
+ * task_id 便于手动找回结果。4xx 等永久错误仍立即抛出，不重试。
+ */
+async function fetchPollQuery(
+  url: string,
+  init: RequestInit,
+  label: string,
+  taskId: string,
+  fetchFn: typeof globalThis.fetch,
+  pollIntervalMs = POLL_INTERVAL_MS,
+): Promise<Response> {
+  let transientFailures = 0
+  let lastTransientMessage = ''
+  for (;;) {
+    let res: Response
+    try {
+      res = await fetchFn(url, init)
+    } catch (err) {
+      // fetch 网络层错误表现为 TypeError；AbortError 等直接透传。
+      if (!(err instanceof TypeError)) throw err
+      transientFailures += 1
+      lastTransientMessage = `网络错误: ${err.message}`
+      if (transientFailures >= POLL_TRANSIENT_FAILURE_LIMIT) break
+      await sleep(pollIntervalMs > 0 ? Math.min(POLL_TRANSIENT_BACKOFF_MS * transientFailures, POLL_TRANSIENT_MAX_BACKOFF_MS) : 0, init.signal as AbortSignal | undefined)
+      continue
+    }
+    if (res.ok) return res
+    const text = await res.text().catch(() => '')
+    if (res.status === 429 || res.status >= 500) {
+      transientFailures += 1
+      lastTransientMessage = `(${res.status}): ${text.slice(0, 300)}`
+      if (transientFailures >= POLL_TRANSIENT_FAILURE_LIMIT) break
+      await sleep(pollIntervalMs > 0 ? Math.min(POLL_TRANSIENT_BACKOFF_MS * transientFailures, POLL_TRANSIENT_MAX_BACKOFF_MS) : 0, init.signal as AbortSignal | undefined)
+      continue
+    }
+    throw new Error(`${label} 查询失败 (${res.status}): ${text.slice(0, 300)}`)
+  }
+  throw new Error(
+    `${label} 查询连续瞬时失败 ${transientFailures} 次，已放弃轮询（任务仍可能已完成，task_id=${taskId}，可用其手动查询找回） ${lastTransientMessage}`,
+  )
+}
 const MUSIC_SYNC_TIMEOUT_MS = 300000
 const MUSIC_DOWNLOAD_TIMEOUT_MS = 120000
 const MAX_DOWNLOADED_MEDIA_BYTES = 512 * 1024 * 1024
@@ -1943,6 +1997,8 @@ async function callOpenAiImagesApi(
     form.append('prompt', input.prompt)
     form.append('size', size)
     for (const [key, value] of Object.entries(advancedOptions)) form.append(key, String(value))
+    // edits 端点同样支持 n（官方 API 参数），与 generations 分支保持一致。
+    form.append('n', String(input.numberOfImages ?? 1))
     for (const ref of references) {
       form.append('image', new Blob([Buffer.from(ref.base64, 'base64')], { type: ref.mediaType }), ref.filename)
     }
@@ -2661,11 +2717,7 @@ async function pollTask(
   for (;;) {
     if (Date.now() > deadline) throw new Error(`${label} 任务轮询超时（${timeoutMs / 1000}s）: task_id=${taskId}`)
     if (pollIntervalMs > 0) await sleep(pollIntervalMs, signal)
-    const res = await fetchFn(queryUrl, { method: 'GET', headers: { Authorization: `Bearer ${apiKey}` }, signal })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`${label} 查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    const res = await fetchPollQuery(queryUrl, { method: 'GET', headers: { Authorization: `Bearer ${apiKey}` }, signal }, label, taskId, fetchFn, pollIntervalMs)
     const body = (await safeParseJson(res, label)) as DashscopeTaskResponse
     const status = body.output?.task_status
     const upperStatus = typeof status === 'string' ? status.trim().toUpperCase() : ''
@@ -2986,7 +3038,9 @@ interface VolcTaskResponse {
 }
 
 function normalizeSeedanceModel(model: string): string {
-  // 兼容旧 UI/历史配置里的大小写模型名；火山新模型统一使用小写。
+  // 旧 UI/历史配置里的 doubao-Seedance-1-0-pro-t2v-250428 是带大小写的 t2v 专用快照，
+  // 火山后续将其收敛为标准版小写模型 doubao-seedance-1-0-pro-250528（同时支持 t2v/i2v/首尾帧），
+  // 这里做新旧模型 ID 的兼容映射（已对照火山方舟模型列表核实两个 ID 均真实存在）。
   if (/^doubao-Seedance-1-0-pro-t2v-250428$/.test(model)) return 'doubao-seedance-1-0-pro-250528'
   return model
 }
@@ -3007,7 +3061,12 @@ async function callVolcengineVideoApi(input: GenerateMediaInput, fetchFn: typeof
   }
   const ratio = sizeToAspectRatio(resolveRequestedSize(input))
   if (ratio) body.ratio = ratio
-  if (input.duration !== undefined) body.duration = input.duration
+  if (input.duration !== undefined) {
+    // Seedance 仅接受 5~12 秒整数；本地校验给出可操作的错误，而非厂商侧生硬 400。
+    const duration = normalizeIntegerDuration(input.duration, model)
+    assertDurationRange(model, duration, 5, 12)
+    body.duration = duration
+  }
   if (input.resolution) body.resolution = input.resolution
   if (input.fps !== undefined) body.framespersecond = input.fps
   if (input.frames !== undefined) body.frames = input.frames
@@ -3034,13 +3093,9 @@ async function callVolcengineVideoApi(input: GenerateMediaInput, fetchFn: typeof
   for (;;) {
     if (Date.now() > deadline) throw new Error(`Seedance 轮询超时: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(`${baseUrl}/contents/generations/tasks/${taskId}`, {
+    const res = await fetchPollQuery(`${baseUrl}/contents/generations/tasks/${taskId}`, {
       method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` }, signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`Seedance 查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'Seedance', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, 'Seedance 查询')) as VolcTaskResponse
     if (body.status === 'succeeded') {
       const videoUrl = body.content?.video_url ?? body.content?.file_url
@@ -3064,10 +3119,15 @@ async function callKlingVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
   const { baseUrl, model } = input.config
   if (!baseUrl) throw new Error('kling-async 缺少 baseUrl')
   const ref = references[0]
+  // 可灵 duration 只接受 5 或 10 秒；本地校验避免厂商侧生硬 400。
+  const klingDuration = input.duration ?? 5
+  if (klingDuration !== 5 && klingDuration !== 10) {
+    throw new Error(`${model} 的 duration 仅支持 5 或 10 秒（收到 ${klingDuration}）`)
+  }
   const body: Record<string, unknown> = {
     model,
     prompt: input.prompt,
-    duration: input.duration ?? 5,
+    duration: klingDuration,
     aspect_ratio: sizeToAspectRatio(resolveRequestedSize(input)) ?? '16:9',
     // 可灵 image 字段接受公网 URL 或裸 base64；这里不要加 Data URI 前缀。
     ...(ref ? { image: ref.base64 } : {}),
@@ -3099,13 +3159,9 @@ async function callKlingVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
     
     const currentAuthHeader = buildKlingAuthHeader(input.apiKey)
 
-    const res = await fetchFn(`${baseUrl}/v1/videos/${ref ? 'image2video' : 'text2video'}/${taskId}`, {
+    const res = await fetchPollQuery(`${baseUrl}/v1/videos/${ref ? 'image2video' : 'text2video'}/${taskId}`, {
       method: 'GET', headers: { Authorization: currentAuthHeader }, signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`可灵查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, '可灵', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, '可灵查询')) as KlingTaskResponse
     const status = body.data?.task_status
     if (status === 'succeed') {
@@ -3235,13 +3291,9 @@ async function callZhipuVideoApi(input: GenerateMediaInput, fetchFn: typeof glob
   for (;;) {
     if (Date.now() > deadline) throw new Error(`智谱视频轮询超时: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(`${baseUrl}/async-result/${taskId}`, {
+    const res = await fetchPollQuery(`${baseUrl}/async-result/${taskId}`, {
       method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` }, signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`智谱视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, '智谱视频', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, '智谱视频查询')) as ZhipuAsyncResponse
     if (body.task_status === 'SUCCESS') {
       const videoUrl = body.video_result?.[0]?.url
@@ -3431,13 +3483,9 @@ async function callMinimaxVideoApi(input: GenerateMediaInput, fetchFn: typeof gl
   for (;;) {
     if (Date.now() > deadline) throw new Error(`MiniMax 视频轮询超时: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(`${baseUrl}/query/video_generation?task_id=${taskId}`, {
+    const res = await fetchPollQuery(`${baseUrl}/query/video_generation?task_id=${taskId}`, {
       method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` }, signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`MiniMax 视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'MiniMax 视频', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, 'MiniMax 视频查询')) as {
       status?: string; file_id?: string; videos?: Array<{ url?: string }>; base_resp?: { status_msg?: string }
     }
@@ -3618,13 +3666,9 @@ async function callMinimaxVideoV2Api(
   for (;;) {
     if (Date.now() > deadline) throw new Error(`MiniMax H3 视频轮询超时: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(`${baseUrl}/query/video_generation/${encodeURIComponent(taskId)}`, {
+    const res = await fetchPollQuery(`${baseUrl}/query/video_generation/${encodeURIComponent(taskId)}`, {
       method: 'GET', headers: { Authorization: `Bearer ${input.apiKey}` }, signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`MiniMax H3 视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'MiniMax H3 视频', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     // 查询响应：任务嵌套在 task 下。
     const queryBody = (await safeParseJson(res, 'MiniMax H3 视频查询')) as MinimaxVideoV2QueryResponse
     const status = queryBody.task?.status
@@ -3702,25 +3746,26 @@ function resolveMinimaxTtsVoice(voice: string | undefined, defaultVoice: string)
   if (known) return known
   if (looksLikeMinimaxSystemVoiceId(raw)) return raw
 
+  // 音色启发式按声明顺序短路匹配；更具体的描述必须放在更宽泛的兜底之前，
+  // 否则后面的分支永远不会命中（历史上"妩媚/魅惑"曾被"御姐"遮蔽）。
   if (/粤语|广东话|广东|cantonese/i.test(raw)) {
     if (/女|female|lady|girl/i.test(raw)) return 'Cantonese_GentleLady'
     return 'Cantonese_PlayfulMan'
   }
   if (/童|儿童|小孩|孩子|child|kid|boy/i.test(raw)) return /女|girl/i.test(raw) ? 'lovely_girl' : 'clever_boy'
-  if (/新闻|主播|anchor/i.test(raw)) return /女|female|lady|woman/i.test(raw) ? 'Chinese (Mandarin)_News_Anchor' : 'Chinese (Mandarin)_Male_Announcer'
-  if (/播报|播音|announcer/i.test(raw)) return /女|female|lady|woman/i.test(raw) ? 'Chinese (Mandarin)_News_Anchor' : 'Chinese (Mandarin)_Male_Announcer'
+  if (/新闻|主播|播报|播音|anchor|announcer/i.test(raw)) return /女|female|lady|woman/i.test(raw) ? 'Chinese (Mandarin)_News_Anchor' : 'Chinese (Mandarin)_Male_Announcer'
   if (/电台|主持|host/i.test(raw)) return 'Chinese (Mandarin)_Radio_Host'
+  // "妩媚/魅惑"语义比"御姐"更具体，需先判，避免被上面的御姐分支遮蔽。
+  if (/妩媚|魅惑/i.test(raw)) return 'wumei_yujie'
   if (/御姐|姐姐|成熟女|成熟女性|adult woman|mature woman/i.test(raw)) return /御姐/.test(raw) ? 'female-yujie' : 'female-chengshu'
   if (/成熟男|稳重男|沉稳|高管|executive/i.test(raw)) return 'Chinese (Mandarin)_Reliable_Executive'
   if (/温柔|柔和|轻柔|舒缓|gentle|soft/i.test(raw)) return /男|male|man/i.test(raw) ? 'Chinese (Mandarin)_Gentleman' : 'Chinese (Mandarin)_Soft_Girl'
   if (/甜美|甜心|sweet/i.test(raw)) return 'female-tianmei'
   if (/少女|清脆|元气|活泼|young girl/i.test(raw)) return 'female-shaonv'
   if (/可爱|萌|cute/i.test(raw)) return /男|male|boy/i.test(raw) ? 'cute_boy' : 'lovely_girl'
-  if (/御姐|妩媚|魅惑/i.test(raw)) return 'wumei_yujie'
   if (/霸道/i.test(raw)) return 'male-qn-badao'
   if (/俊朗|男友|帅气/i.test(raw)) return 'junlang_nanyou'
   if (/青年|大学生|年轻男/i.test(raw)) return 'male-qn-daxuesheng'
-  if (/新闻|播报|播音|主播|announcer|anchor/i.test(raw)) return 'male-qn-jingying'
   if (/低沉|浑厚|磁性|朗诵|成熟男|male|man|男/i.test(raw)) return 'male-qn-jingying'
   if (/女|female|girl|lady|woman/i.test(raw)) return 'female-tianmei'
 
@@ -3809,15 +3854,11 @@ async function callMinimaxAsyncTtsApi(input: GenerateMediaInput, fetchFn: typeof
   for (;;) {
     if (Date.now() > deadline) throw new Error(`MiniMax 异步 TTS 轮询超时（${AUDIO_POLL_TIMEOUT_MS / 1000}s）: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const queryRes = await fetchFn(`${baseUrl}/query/t2a_async_query_v2?task_id=${encodeURIComponent(String(taskId))}`, {
+    const queryRes = await fetchPollQuery(`${baseUrl}/query/t2a_async_query_v2?task_id=${encodeURIComponent(String(taskId))}`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${input.apiKey}` },
       signal: input.signal,
-    })
-    if (!queryRes.ok) {
-      const text = await queryRes.text().catch(() => '')
-      throw new Error(`MiniMax 异步 TTS 查询失败 (${queryRes.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'MiniMax 异步 TTS', String(taskId), fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const queryBody = (await safeParseJson(queryRes, 'MiniMax 异步 TTS 查询')) as {
       status?: string
       file_id?: string | number
@@ -4031,50 +4072,59 @@ async function callStabilityImageApi(input: GenerateMediaInput, fetchFn: typeof 
   // baseUrl 形如 https://api.stability.ai/v2beta/stable-image/generate，拼上 /{model}
   const endpointModel = model.startsWith('sd3') ? 'sd3' : model
   const url = `${baseUrl.replace(/\/$/, '')}/${endpointModel}`
-  const form = new FormData()
-  form.append('prompt', input.prompt)
-  if (endpointModel === 'sd3' && model !== 'sd3') {
-    // Stability 的 SD3/SD3.5 家族共用 /sd3 端点，通过 model 字段选择具体模型。
-    form.append('model', model)
-  }
-  // Stability 接受 aspect_ratio（如 1:1 / 16:9）；size 若为比例直接用，否则换算
-  const aspect = resolveRequestedSize(input) || input.config.preset?.defaultSize || '1:1'
-  form.append('aspect_ratio', aspect.includes(':') ? aspect : (sizeToAspectRatio(aspect) ?? '1:1'))
-  const outputFormat = input.outputFormat ?? 'png'
-  form.append('output_format', outputFormat)
-  if (input.negativePrompt) form.append('negative_prompt', input.negativePrompt)
-  if (input.stylePreset) form.append('style_preset', input.stylePreset)
-  if (input.guidanceScale !== undefined) form.append('cfg_scale', String(input.guidanceScale))
-  if (input.seed !== undefined) form.append('seed', String(input.seed))
-  else if (input.numberOfImages && input.numberOfImages > 1) {
-    form.append('seed', String(Math.floor(Math.random() * 1_000_000)))
-  }
+  // Stability 单请求只产出一张；numberOfImages > 1 时串行发起多次请求（每次随机 seed），
+  // 而不是静默只返回一张。
+  const n = Math.max(1, input.numberOfImages ?? 1)
+  const images: GeneratedImageData[] = []
+  for (let attemptIndex = 0; attemptIndex < n; attemptIndex++) {
+    // FormData 发送后不可复用，每次请求重建。
+    const form = new FormData()
+    form.append('prompt', input.prompt)
+    if (endpointModel === 'sd3' && model !== 'sd3') {
+      // Stability 的 SD3/SD3.5 家族共用 /sd3 端点，通过 model 字段选择具体模型。
+      form.append('model', model)
+    }
+    // Stability 接受 aspect_ratio（如 1:1 / 16:9）；size 若为比例直接用，否则换算
+    const aspect = resolveRequestedSize(input) || input.config.preset?.defaultSize || '1:1'
+    form.append('aspect_ratio', aspect.includes(':') ? aspect : (sizeToAspectRatio(aspect) ?? '1:1'))
+    const outputFormat = input.outputFormat ?? 'png'
+    form.append('output_format', outputFormat)
+    if (input.negativePrompt) form.append('negative_prompt', input.negativePrompt)
+    if (input.stylePreset) form.append('style_preset', input.stylePreset)
+    if (input.guidanceScale !== undefined) form.append('cfg_scale', String(input.guidanceScale))
+    if (input.seed !== undefined) {
+      // 显式 seed 时多图请求按次偏移（seed、seed+1…），避免同一 seed 串行请求产出 n 张相同的图。
+      form.append('seed', String(input.seed + attemptIndex))
+    } else if (n > 1) form.append('seed', String(Math.floor(Math.random() * 1_000_000)))
 
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`,
-      Accept: 'application/json',
-    },
-    body: form,
-    signal: input.signal,
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`Stability 图片 API 错误 (${res.status}): ${text.slice(0, 300)}`)
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${input.apiKey}`,
+        Accept: 'application/json',
+      },
+      body: form,
+      signal: input.signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Stability 图片 API 错误 (${res.status}): ${text.slice(0, 300)}`)
+    }
+    const body = (await safeParseJson(res, 'Stability 图片')) as {
+      image?: string
+      finish_reason?: string
+      seed?: number
+    }
+    if (typeof body.image === 'string' && body.image.length > 0) {
+      images.push({ mediaType: imageMimeForFormat(outputFormat), data: body.image })
+    } else {
+      // 兜底：部分网关可能用 b64_json 字段
+      const b64 = (body as { b64_json?: string }).b64_json
+      if (b64) images.push({ mediaType: imageMimeForFormat(outputFormat), data: b64 })
+      else throw new Error('Stability 未返回图片数据')
+    }
   }
-  const body = (await safeParseJson(res, 'Stability 图片')) as {
-    image?: string
-    finish_reason?: string
-    seed?: number
-  }
-  if (typeof body.image !== 'string' || body.image.length === 0) {
-    // 兜底：部分网关可能用 b64_json 字段
-    const b64 = (body as { b64_json?: string }).b64_json
-    if (b64) return { images: [{ mediaType: imageMimeForFormat(outputFormat), data: b64 }] }
-    throw new Error('Stability 未返回图片数据')
-  }
-  return { images: [{ mediaType: imageMimeForFormat(outputFormat), data: body.image }] }
+  return { images }
 }
 
 
@@ -4144,20 +4194,16 @@ async function callMidjourneyApi(input: GenerateMediaInput, fetchFn: typeof glob
   const taskId = submitBody.result
   if (!taskId) throw new Error(`Midjourney 未返回任务 ID: ${submitBody.description ?? '未知错误'}`)
 
-  // 轮询任务状态
-  const deadline = Date.now() + IMAGE_POLL_TIMEOUT_MS
+  // 轮询任务状态（MJ 经网关排队常超 5 分钟，单独用 10 分钟超时）
+  const deadline = Date.now() + MJ_POLL_TIMEOUT_MS
   for (;;) {
-    if (Date.now() > deadline) throw new Error(`Midjourney 任务轮询超时: ${taskId}`)
+    if (Date.now() > deadline) throw new Error(`Midjourney 任务轮询超时（${MJ_POLL_TIMEOUT_MS / 1000}s）: ${taskId}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(`${baseUrl}/mj/task/${taskId}/fetch`, {
+    const res = await fetchPollQuery(`${baseUrl}/mj/task/${taskId}/fetch`, {
       method: 'GET',
       headers: { 'mj-api-secret': input.apiKey, Authorization: `Bearer ${input.apiKey}` },
       signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`MJ 查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'MJ', taskId, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, 'MJ 查询')) as MjTaskResponse
     if (body.status === 'SUCCESS') {
       const imageUrl = body.imageUrl
@@ -4250,16 +4296,12 @@ async function callTencentHunyuanAsyncApi(
     if (Date.now() > deadline) throw new Error(`腾讯混元 Maas 任务轮询超时: ${id}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
     
-    const res = await fetchFn(`${baseUrl}/api/${pathPrefix}/query`, {
+    const res = await fetchPollQuery(`${baseUrl}/api/${pathPrefix}/query`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, id }),
       signal: input.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`腾讯混元 Maas 查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, '腾讯混元 Maas', id, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, '腾讯混元 Maas 查询')) as {
       code?: number
       message?: string
@@ -4408,18 +4450,14 @@ function resolveGooglePredictLongRunningPollUrl(
   return url.toString()
 }
 
-/** Omni file download URL：从 interactions URL 推导 files/:download 路径 */
-function resolveGoogleOmniFileDownloadUrl(interactionsUrl: string, fileId: string, authKind: 'api-key' | 'oauth'): string {
+/** Omni file download URL：从 interactions URL 推导 files/:download 路径（认证走下载 headers 中的 x-goog-api-key，key 不进 URL） */
+function resolveGoogleOmniFileDownloadUrl(interactionsUrl: string, fileId: string): string {
   const url = new URL(interactionsUrl)
   const escapedFileId = encodeURIComponent(fileId)
   const interactionsIndex = url.pathname.lastIndexOf('/interactions')
   const prefix = interactionsIndex >= 0 ? url.pathname.slice(0, interactionsIndex) : '/v1beta'
   url.pathname = `${prefix}/files/${escapedFileId}:download`
   url.search = 'alt=media'
-  if (authKind === 'api-key') {
-    const apiKey = new URL(interactionsUrl).searchParams.get('key')
-    if (apiKey) url.searchParams.set('key', apiKey)
-  }
   return url.toString()
 }
 
@@ -4499,7 +4537,7 @@ function isVeoLiteModel(model: string): boolean {
  * Google Veo 视频生成（predictLongRunning）。
  * Gemini Omni Flash 虽然复用 google-interactions 预设组，但走独立的 /v1beta/interactions 分支。
  *
- * 认证用 x-goog-api-key 头（与 Gemini Image 的 ?key= 查询参数不同）。
+ * 认证统一用 x-goog-api-key 头（API Key 绝不进 URL query，防代理/网关日志泄漏）。
  */
 async function callGoogleInteractionsVideoApi(
   input: GenerateMediaInput,
@@ -4607,15 +4645,11 @@ async function callGoogleInteractionsVideoApi(
   for (;;) {
     if (Date.now() > deadline) throw new Error(`Google 视频轮询超时（${VIDEO_POLL_TIMEOUT_MS / 1000}s）: ${operationName}`)
     if ((input.pollIntervalMs ?? POLL_INTERVAL_MS) > 0) await sleep(input.pollIntervalMs ?? POLL_INTERVAL_MS, input.signal)
-    const res = await fetchFn(pollUrl, {
+    const res = await fetchPollQuery(pollUrl, {
       method: 'GET',
       headers: pollHeaders,
       ...(input.signal ? { signal: input.signal } : {}),
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`Google 视频查询失败 (${res.status}): ${text.slice(0, 300)}`)
-    }
+    }, 'Google 视频', operationName, fetchFn, input.pollIntervalMs ?? POLL_INTERVAL_MS)
     const body = (await safeParseJson(res, 'Google 视频查询')) as GoogleLroResponse
     if (body.done) {
       if (body.error) throw new Error(`Google 视频生成失败: ${body.error.message ?? body.error.status ?? '未知错误'}`)
@@ -4719,8 +4753,8 @@ async function callGoogleOmniVideoApi(
     }
     const fileId = extractGoogleOmniFileId(item)
     if (fileId) {
-      const downloadUrl = resolveGoogleOmniFileDownloadUrl(target.url, fileId, target.authKind)
-      videos.push(await downloadAsBase64(downloadUrl, fetchFn, input.signal, mediaType, googlePollingHeaders(target.headers)))
+      const downloadUrl = resolveGoogleOmniFileDownloadUrl(target.url, fileId)
+      videos.push(await downloadAsBase64(downloadUrl, fetchFn, input.signal, mediaType, googleMediaDownloadHeaders(target.headers, target.authKind)))
     }
   }
   if (videos.length === 0) throw new Error('Google Omni 视频成功但未返回视频内容')

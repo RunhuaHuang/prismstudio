@@ -77,6 +77,9 @@ describe('webui server · local API guard', () => {
   test('only loopback authorities are allowed', () => {
     expect(isLoopbackAuthority('127.0.0.1:17899')).toBe(true)
     expect(isLoopbackAuthority('localhost:17899')).toBe(true)
+    // 部分环境把 localhost 解析成 IPv6 回环，::1（含方括号带端口形态）同样放行。
+    expect(isLoopbackAuthority('[::1]:17899')).toBe(true)
+    expect(isLoopbackAuthority('::1')).toBe(false) // 无方括号的裸 IPv6 带端口形态无法区分主机/端口，拒绝
     expect(isLoopbackAuthority('0.0.0.0:17899')).toBe(false)
     expect(isLoopbackAuthority('example.com')).toBe(false)
   })

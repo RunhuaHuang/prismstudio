@@ -544,7 +544,7 @@ export async function runGeneration(
     audioFormat: optionalEnumStringArg(args, ['mp3', 'wav', 'flac', 'pcm'] as const, 'audioFormat', 'audio_format'),
     instruction: optionalStringArg(args, 'instruction'),
     // task 枚举校验：非法值直接抛错，避免自定义配置下静默落到 TTS 分支（用错误模型请求 TTS）。
-    audioTask: requireEnumArg(args, ['tts', 'music', 'clone'] as const, 'task', 'task'),
+    audioTask: requireEnumArg(args, ['tts', 'music', 'clone'] as const, 'task'),
     voice: optionalStringArg(args, 'voice'),
     lyrics: optionalStringArg(args, 'lyrics'),
     instrumental: optionalBoolArg(args, 'instrumental', 'isInstrumental'),
@@ -642,10 +642,10 @@ export function createMcpServer(outputDirOverride?: string): Server {
       const resolvedForLog = resolveModality(config, def.modality)
       try {
         const { content, outputCount } = await runGeneration(def.modality, normalizedArgs, {
-        outputDir: resolve(outputDirOverride || config.outputDir || getDefaultOutputDir()),
-        sessionId: extra.sessionId,
-        signal: extra.signal,
-      })
+          outputDir: resolve(outputDirOverride || config.outputDir || getDefaultOutputDir()),
+          sessionId: extra.sessionId,
+          signal: extra.signal,
+        })
         writeGenerationDiagnostic(config, {
           requestId, source: 'mcp', outcome: 'success', modality: def.modality,
           protocol: resolvedForLog?.config.protocol,

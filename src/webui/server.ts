@@ -74,6 +74,9 @@ export function parseApiRequestUrl(url: string): URL | null {
 
 const HTML_CSP = [
   "default-src 'none'",
+  // 'unsafe-inline'+'unsafe-eval'：内嵌 Alpine.js 标准版通过 new Function 求值 x-data 内联表达式，
+  // 两者缺一不可。页面动态内容全部经 x-text（无 x-html 注入面），Alpine 脚本本地打包不走 CDN，
+  // 已将 eval 带来的残余风险收敛到"仅本地资源可执行"。
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
@@ -209,7 +212,10 @@ interface ApiRequestMeta {
 }
 
 function stripPort(authority: string): string {
-  return authority.replace(/^\[/, '').replace(/\]$/, '').split(':')[0]?.toLowerCase() ?? ''
+  // IPv6 方括号形式（如 [::1]:8787）：主机部分本身含冒号，需整体取出而非按冒号切分。
+  const bracketMatch = /^\[([^\]]+)\]/.exec(authority)
+  if (bracketMatch?.[1]) return bracketMatch[1].toLowerCase()
+  return authority.split(':')[0]?.toLowerCase() ?? ''
 }
 
 function getPort(authority: string): string {
@@ -220,7 +226,8 @@ function getPort(authority: string): string {
 export function isLoopbackAuthority(authority: string | undefined): boolean {
   if (!authority) return false
   const host = stripPort(authority)
-  return host === '127.0.0.1' || host === 'localhost'
+  // 部分环境会把 localhost 解析成 IPv6 回环 ::1，一并放行。
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1'
 }
 
 /** 根据配置中的输出根目录计算 MCP 生成物的实际落盘目录。 */
@@ -354,7 +361,14 @@ async function handleApi(
       saveConfig(merged)
       sendJson(res, 200, { ok: true, config: sanitizeConfig(merged) })
     } catch (err) {
-      sendJson(res, 400, { error: safeHttpErrorMessage(err, loadConfig()) })
+      // catch 里再 loadConfig() 可能因磁盘配置损坏而抛错，吞掉原始保存错误；失败时退回空配置。
+      let currentForRedact: DuoConfig
+      try {
+        currentForRedact = loadConfig()
+      } catch {
+        currentForRedact = {} as DuoConfig
+      }
+      sendJson(res, 400, { error: safeHttpErrorMessage(err, currentForRedact) })
     }
     return true
   }
@@ -398,9 +412,13 @@ async function handleApi(
     let submittedApiKey: string | undefined
     let requestSecrets: string[] = []
     // 客户端断开（关标签页/刷新）时中止上游轮询与下载，避免用户已离开却继续产生费用的付费请求。
+    // 注意：不能用 req 的 'close' —— Node ≥16.3 中请求体被完整消费后 req 也会触发 'close'，
+    // 会误把正常完成当作断开而中止上游付费请求；响应侧 'close' 且未正常写完才是真正的客户端离开。
     const ac = new AbortController()
-    const onClientClose = () => ac.abort()
-    req.on('close', onClientClose)
+    const onClientClose = () => {
+      if (!res.writableEnded) ac.abort()
+    }
+    res.on('close', onClientClose)
     try {
       const raw = await readJsonBody(req)
       const validationError = validateTestRequestPayload(raw)
@@ -420,7 +438,7 @@ async function handleApi(
         sendJson(res, 400, { error: redactSensitiveText(rawMessage, secrets) })
       }
     } finally {
-      req.off('close', onClientClose)
+      res.off('close', onClientClose)
     }
     return true
   }
@@ -926,7 +944,13 @@ export function startWebuiServer(port: number): Promise<void> {
         sendJson(res, 404, { error: 'Not Found' })
       } catch (err) {
         if (!res.headersSent) {
-          sendJson(res, 500, { error: safeHttpErrorMessage(err, loadConfig()) })
+          let configForRedact: DuoConfig
+          try {
+            configForRedact = loadConfig()
+          } catch {
+            configForRedact = {} as DuoConfig
+          }
+          sendJson(res, 500, { error: safeHttpErrorMessage(err, configForRedact) })
         }
       }
     })

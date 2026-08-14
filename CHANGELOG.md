@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-14
+
+### Fixed
+- **WebUI 试用台误中止**：Node ≥16.3 中请求体被完整消费后 `req` 也会触发 `close`，旧写法会在每次正常试用时立刻中止上游付费请求；改为响应侧 `close` + `writableEnded` 判断，仅在客户端真正离开时中止。
+- **轮询零容忍导致已计费任务丢失**：全部 10 处异步轮询器（DashScope/Seedance/可灵/智谱/MiniMax×3/Midjourney/混元/Google）统一接入瞬时失败容忍——429/5xx/网络抖动按递增退避重试（连续 3 次才放弃），4xx 永久错误立即抛出，失败信息保留 task_id 便于手动找回已计费结果。
+- **Gemini API Key 泄漏面收敛**：`generateContent` / `interactions` 及 Omni 文件下载不再把 key 放进 URL query，统一只走 `x-goog-api-key` 请求头，避免被代理/网关访问日志持续复制泄漏。
+- **Midjourney 轮询超时**由 5 分钟放宽到 10 分钟（第三方网关排队 + relax 模式常超 5 分钟）。
+- **Stability 多图静默缩水**：`numberOfImages > 1` 时串行发起多次请求（每次独立随机 seed；显式 seed 按次偏移），不再只返回一张。
+- **OpenAI images/edits 漏传 `n`**：编辑分支与生成分支行为对齐。
+- **配置损坏保护**：`config.json` 解析失败时先备份为 `config.json.corrupt-<ts>` 再返回空配置，防止 WebUI 随后保存任意一项就用近空配置覆盖原文件导致 API Key 永久丢失。
+- **WebUI 兼容 IPv6 回环**：Host 校验放行 `[::1]`（部分环境把 localhost 解析成 IPv6）。
+- PUT `/api/config` 与 500 兜底中的二次 `loadConfig()` 加保护，磁盘配置损坏时不再吞掉原始保存错误。
+
+### Changed
+- Seedance / 可灵 `duration` 增加本地校验（5~12 整数秒 / 仅 5 或 10 秒），非法值本地抛可读错误而非厂商侧生硬 400。
+- MiniMax TTS 音色启发式正则重排，修复"妩媚/魅惑"等分支被更宽泛分支遮蔽导致的静默音色错配。
+- persist 写入失败日志补充请求文件名与输出目录；WebUI 载入失败文案不再误用"提交失败"。
+
 ## [0.5.0] — 2026-08-11
 
 ### Added

@@ -1459,11 +1459,11 @@ function prismApp() {
       this._restoring = true;
       try {
         const r = await fetch('/api/config');
-        if (!r.ok) throw new Error(this.t.commitFailed + ' (' + r.status + ')');
+        if (!r.ok) throw new Error(this.t.loadFailed + ' (HTTP ' + r.status + ')');
         const data = await r.json();
         // 服务器错误体或非对象响应不能当 config 使用，否则可能把默认 stub 覆盖回磁盘。
         if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) {
-          throw new Error(data?.error || this.t.commitFailed);
+          throw new Error(data?.error || this.t.loadFailed);
         }
         this.config = data;
         if (!this.config.policy || typeof this.config.policy !== 'object') this.config.policy = {};
