@@ -22,7 +22,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, unwatchFile, watchFile, type Stats } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -46,9 +47,16 @@ import {
   isModalityReady,
   getConfigPath,
   getDefaultOutputDir,
+  collectConfigSecrets,
+  redactSensitiveText,
+  resolveGenerationPolicy,
+  resolveModalityApiKey,
+  isValidHttpBaseUrl,
   type DuoConfig,
 } from './config.js'
 import { persistGenerated, type McpContent } from './persist.js'
+import { writeGenerationDiagnostic } from './diagnostics.js'
+import { enforceGenerationPolicy } from './policy.js'
 
 function readPackageVersion(): string {
   try {
@@ -63,6 +71,12 @@ function readPackageVersion(): string {
 export const PACKAGE_VERSION = readPackageVersion()
 
 // ===== 参数解析辅助（fork 自 Run mcp.ts） =====
+
+/**
+ * stdio MCP 没有传输层 sessionId 时，调用方可显式提供的非敏感会话标识。
+ * 只接受短、可打印的 opaque token，避免把 prompt、路径或任意大字符串留在进程内存缓存中。
+ */
+const EXPLICIT_SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 function optionalStringArg(args: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
@@ -128,6 +142,21 @@ function optionalBoolArg(args: Record<string, unknown>, ...keys: string[]): bool
   return undefined
 }
 
+function diagnosticSecretsForArguments(args: Record<string, unknown>): string[] {
+  const values: string[] = []
+  for (const key of ['prompt', 'text', 'lyrics', 'instruction', 'voice', 'audioUrl']) {
+    const value = args[key]
+    if (typeof value === 'string' && value.trim().length >= 4) values.push(value)
+  }
+  for (const key of ['referenceImagePaths', 'referencePaths']) {
+    const value = args[key]
+    if (Array.isArray(value)) {
+      for (const item of value) if (typeof item === 'string') values.push(item)
+    }
+  }
+  return values
+}
+
 // ===== JSON Schema 工具定义（fork 自 Run mcp.ts，纯 JSON Schema 无 zod） =====
 
 interface ToolDefinition {
@@ -143,10 +172,10 @@ const IMAGE_SCHEMA: Record<string, unknown> = {
     prompt: { type: 'string', description: 'Detailed image prompt / edit instruction.' },
     referenceImagePaths: { type: 'array', items: { type: 'string' }, description: 'Local file paths of reference images to edit (for editing or multi-turn).' },
     size: { type: 'string', description: 'Output size WIDTHxHEIGHT, e.g. 1024x1024.' },
-    numberOfImages: { type: 'number', description: 'How many images (1-4, default 1).' },
+    numberOfImages: { type: 'integer', minimum: 1, maximum: 4, description: 'How many images (1-4, default 1).' },
     quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'OpenAI Images only: quality level.' },
     outputFormat: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'OpenAI Images only: output format.' },
-    outputCompression: { type: 'number', description: 'OpenAI Images only: compression 0-100, only for jpeg/webp.' },
+    outputCompression: { type: 'integer', minimum: 0, maximum: 100, description: 'OpenAI Images only: compression 0-100, only for jpeg/webp.' },
     background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'OpenAI Images only: background.' },
     moderation: { type: 'string', enum: ['auto', 'low'], description: 'OpenAI Images only: moderation strictness.' },
     negativePrompt: { type: 'string', description: 'Optional negative prompt (supported by DashScope/Stability/Kling/etc.).' },
@@ -157,18 +186,20 @@ const IMAGE_SCHEMA: Record<string, unknown> = {
     guidanceScale: { type: 'number', description: 'CFG/guidance scale where supported.' },
     aspectRatio: { type: 'string', enum: ['1:1', '16:9', '4:3', '9:16', '3:4'], description: 'Gemini only: output aspect ratio (default 1:1).' },
     imageSize: { type: 'string', enum: ['auto', '1K', '2K', '4K'], description: 'Gemini only: output resolution (default auto).' },
+    sessionId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$', maxLength: 128, description: 'Optional opaque conversation ID for safe multi-turn image editing. Reuse the same non-secret ID only within one conversation; stdio clients should provide it explicitly.' },
     filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "neymar-world-cup-shot"). If omitted, a random name is used.' },
   },
   required: ['prompt'],
+  additionalProperties: false,
 }
 
 const VIDEO_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     prompt: { type: 'string', description: 'Description of the video to generate.' },
-    duration: { type: 'number', description: 'Video duration in seconds where supported. DashScope HappyHorse t2v/i2v/r2v: 3-15; wan2.7 t2v/i2v/r2v: 2-15; wan2.7 r2v with reference video and videoedit: 2-10; wan2.7 videoedit also accepts 0 to follow input.' },
+    duration: { type: 'number', minimum: 0, description: 'Video duration in seconds where supported. DashScope HappyHorse t2v/i2v/r2v: 3-15; wan2.7 t2v/i2v/r2v: 2-15; wan2.7 r2v with reference video and videoedit: 2-10; wan2.7 videoedit also accepts 0 to follow input.' },
     size: { type: 'string', description: 'Aspect ratio or resolution, e.g. 16:9 or 1280x720.' },
-    numberOfVideos: { type: 'number', description: 'How many videos to generate where supported.' },
+    numberOfVideos: { type: 'integer', minimum: 1, maximum: 4, description: 'How many videos to generate where supported.' },
     referenceImagePaths: { type: 'array', items: { type: 'string' }, description: 'Optional local reference image paths for image-to-video.' },
     referenceMode: { type: 'string', enum: ['first_frame', 'reference'], description: 'When exactly 1 reference image is provided for HappyHorse/wan2.7 (auto-routed): "first_frame" = use the image as the video first frame and animate it (→ i2v, default); "reference" = use the image as a style/character reference to generate a new video (→ r2v). Ignored when 0 images (→ t2v) or ≥2 images (→ r2v).' },
     referenceType: { type: 'string', enum: ['asset', 'style'], description: 'Google Veo only: semantic type for referenceImages when referenceMode="reference". Use asset for subject/object references, style for visual style references.' },
@@ -190,9 +221,11 @@ const VIDEO_SCHEMA: Record<string, unknown> = {
     cameraFixed: { type: 'boolean', description: 'Fix/disable camera motion where supported.' },
     mode: { type: 'string', description: 'Provider-specific generation mode, e.g. std/pro.' },
     guidanceScale: { type: 'number', description: 'CFG/guidance scale where supported.' },
+    sessionId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$', maxLength: 128, description: 'Optional opaque conversation ID for safe multi-turn video continuation. Reuse the same non-secret ID only within one conversation; stdio clients should provide it explicitly.' },
     filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "ocean-sunset-clip"). If omitted, a random name is used.' },
   },
   required: ['prompt'],
+  additionalProperties: false,
 }
 
 const AUDIO_SCHEMA: Record<string, unknown> = {
@@ -219,6 +252,121 @@ const AUDIO_SCHEMA: Record<string, unknown> = {
     filename: { type: 'string', description: 'Optional semantic filename without extension (e.g. "podcast-intro"). If omitted, a random name is used.' },
   },
   required: ['text'],
+  additionalProperties: false,
+}
+
+type JsonSchemaProperty = Record<string, unknown>
+
+/** 兼容旧客户端使用的 snake_case 参数；规范化后只向引擎传 canonical camelCase。 */
+const MCP_ARGUMENT_ALIASES: Record<MediaModality, Record<string, string>> = {
+  image: {
+    reference_image_paths: 'referenceImagePaths', number_of_images: 'numberOfImages',
+    output_format: 'outputFormat', output_compression: 'outputCompression',
+    negative_prompt: 'negativePrompt', prompt_enhance: 'promptEnhance',
+    style_preset: 'stylePreset', guidance_scale: 'guidanceScale', cfgScale: 'guidanceScale',
+    aspect_ratio: 'aspectRatio', image_size: 'imageSize', session_id: 'sessionId',
+  },
+  video: {
+    number_of_videos: 'numberOfVideos', reference_image_paths: 'referenceImagePaths',
+    reference_mode: 'referenceMode', reference_type: 'referenceType',
+    last_frame_image_path: 'lastFrameImagePath', last_frame_path: 'lastFrameImagePath',
+    video_path: 'videoPath', video_url: 'videoUrl', negative_prompt: 'negativePrompt',
+    prompt_enhance: 'promptEnhance', person_generation: 'personGeneration',
+    with_audio: 'withAudio', audio_url: 'audioUrl', audio_setting: 'audioSetting',
+    return_last_frame: 'returnLastFrame', camera_fixed: 'cameraFixed',
+    cfg_scale: 'guidanceScale', cfgScale: 'guidanceScale', guidance_scale: 'guidanceScale', session_id: 'sessionId',
+    reference_video_path: 'videoPath', referenceVideoPath: 'videoPath',
+    reference_video_url: 'videoUrl', referenceVideoUrl: 'videoUrl',
+  },
+  audio: {
+    reference_paths: 'referencePaths', audio_format: 'audioFormat',
+    lyrics_optimizer: 'lyricsOptimizer', music_output_format: 'musicOutputFormat',
+    output_format: 'musicOutputFormat', sample_rate: 'sampleRate',
+    cover_feature_id: 'coverFeatureId', aigc_watermark: 'aigcWatermark',
+    is_instrumental: 'instrumental', isInstrumental: 'instrumental', vol: 'volume',
+  },
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeMcpArguments(modality: MediaModality, raw: unknown): Record<string, unknown> {
+  if (!isPlainObject(raw)) throw new Error('工具参数必须是 JSON 对象')
+  const normalized: Record<string, unknown> = { ...raw }
+  const aliases = MCP_ARGUMENT_ALIASES[modality]
+  for (const [alias, canonical] of Object.entries(aliases)) {
+    if (!Object.prototype.hasOwnProperty.call(raw, alias)) continue
+    if (Object.prototype.hasOwnProperty.call(raw, canonical) && raw[canonical] !== raw[alias]) {
+      throw new Error(`参数 ${alias} 与 ${canonical} 同时存在且值不一致`)
+    }
+    normalized[canonical] = raw[alias]
+    delete normalized[alias]
+  }
+  // 旧调用有时把 prompt/text 互换；只在当前模态缺少 canonical 字段时兼容，
+  // 不接受跨模态数量字段，避免策略校验被绕过。
+  if (modality !== 'audio' && normalized.prompt === undefined && normalized.text !== undefined) {
+    normalized.prompt = normalized.text
+    delete normalized.text
+  }
+  if (modality === 'audio' && normalized.text === undefined && normalized.prompt !== undefined) {
+    normalized.text = normalized.prompt
+    delete normalized.prompt
+  }
+  if (modality === 'image' && normalized.numberOfVideos !== undefined) {
+    throw new Error('图像工具只接受 numberOfImages，不接受 numberOfVideos')
+  }
+  if (modality === 'video' && normalized.numberOfImages !== undefined) {
+    throw new Error('视频工具只接受 numberOfVideos，不接受 numberOfImages')
+  }
+  return normalized
+}
+
+function validateMcpToolArguments(modality: MediaModality, raw: unknown): Record<string, unknown> {
+  const args = normalizeMcpArguments(modality, raw)
+  const schema = modality === 'image' ? IMAGE_SCHEMA : modality === 'video' ? VIDEO_SCHEMA : AUDIO_SCHEMA
+  const properties = (schema.properties ?? {}) as Record<string, JsonSchemaProperty>
+  for (const key of Object.keys(args)) {
+    if (!Object.prototype.hasOwnProperty.call(properties, key)) {
+      throw new Error(`未知工具参数: ${key}`)
+    }
+  }
+  const required = Array.isArray(schema.required) ? schema.required as string[] : []
+  for (const key of required) {
+    if (!(key in args) || args[key] === undefined || args[key] === null) {
+      throw new Error(`缺少必填参数: ${key}`)
+    }
+  }
+  for (const [key, value] of Object.entries(args)) {
+    const rule = properties[key]
+    if (!rule) continue
+    const type = rule.type
+    if (type === 'string' && typeof value !== 'string') throw new Error(`${key} 必须是字符串`)
+    if (type === 'boolean' && typeof value !== 'boolean') throw new Error(`${key} 必须是布尔值`)
+    if (type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`${key} 必须是有限数字`)
+    if (type === 'integer' && (typeof value !== 'number' || !Number.isInteger(value))) throw new Error(`${key} 必须是整数`)
+    if (type === 'array' && (!Array.isArray(value) || value.some((item) => typeof item !== 'string'))) throw new Error(`${key} 必须是字符串数组`)
+    if (Array.isArray(rule.enum) && !(rule.enum as unknown[]).includes(value)) throw new Error(`${key} 参数值不受支持`)
+    if (typeof value === 'number' && typeof rule.minimum === 'number' && value < rule.minimum) throw new Error(`${key} 不能小于 ${rule.minimum}`)
+    if (typeof value === 'number' && typeof rule.maximum === 'number' && value > rule.maximum) throw new Error(`${key} 不能大于 ${rule.maximum}`)
+    if (typeof value === 'string' && typeof rule.maxLength === 'number' && value.length > rule.maxLength) throw new Error(`${key} 长度不能超过 ${rule.maxLength}`)
+    if (typeof value === 'string' && typeof rule.pattern === 'string' && !(new RegExp(rule.pattern).test(value))) throw new Error(`${key} 格式无效`)
+  }
+  return args
+}
+
+export { validateMcpToolArguments }
+
+/** 传输层 sessionId 优先；stdio 无此元数据时，仅使用工具显式传入的安全 token。 */
+export function resolveGenerationSessionId(args: Record<string, unknown>, transportSessionId?: string): string | undefined {
+  const transport = transportSessionId?.trim()
+  if (transport) return transport
+  const explicit = optionalStringArg(args, 'sessionId')
+  if (!explicit) return undefined
+  if (!EXPLICIT_SESSION_ID_PATTERN.test(explicit)) {
+    throw new Error('sessionId 必须是 1-128 位的字母、数字、点、下划线或连字符，且不能包含敏感信息')
+  }
+  return explicit
 }
 
 // ===== Qwen3-TTS / MiniMax 音色提示文本（动态追加到 description） =====
@@ -236,11 +384,12 @@ interface ResolvedModality {
 /** 解析某模态的有效配置（复用引擎的 resolveEffectiveMediaCredentials / resolveMediaConfig） */
 export function resolveModality(config: DuoConfig, modality: MediaModality): ResolvedModality | null {
   const mod = getModalityConfig(config, modality)
-  if (!mod?.apiKey?.trim()) return null
-  const credentials = resolveEffectiveMediaCredentials(toEngineCredentials(mod), modality)
+  const apiKey = resolveModalityApiKey(mod)
+  if (!mod?.enabled || !apiKey) return null
+  const credentials = resolveEffectiveMediaCredentials(toEngineCredentials(mod, apiKey), modality)
   const resolved = resolveMediaConfig(credentials, modality)
-  if (!resolved || !resolved.baseUrl.trim()) return null
-  return { config: resolved, apiKey: credentials.apiKey }
+  if (!resolved || !isValidHttpBaseUrl(resolved.baseUrl)) return null
+  return { config: resolved, apiKey: credentials.apiKey || apiKey }
 }
 
 // ===== 描述文本构造 =====
@@ -304,8 +453,9 @@ export async function runGeneration(
   modality: MediaModality,
   args: Record<string, unknown>,
   ctx: ToolContext,
-): Promise<{ content: McpContent[] }> {
+): Promise<{ content: McpContent[]; outputCount: number }> {
   const config = loadConfig()
+  const policy = resolveGenerationPolicy(config)
   const resolved = resolveModality(config, modality)
   if (!resolved) {
     const modalityName = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'
@@ -314,11 +464,15 @@ export async function runGeneration(
     )
   }
 
-  const sessionId = ctx.sessionId ?? `duo-${modality}`
+  const sessionId = resolveGenerationSessionId(args, ctx.sessionId)
 
   // prompt / text 参数
   const prompt = typeof (args.prompt ?? args.text) === 'string' ? String(args.prompt ?? args.text) : ''
   if (!prompt.trim()) throw new Error('缺少 prompt/text 参数')
+  enforceGenerationPolicy(modality, args, prompt, policy, {
+    defaultSize: resolved.config.preset?.defaultSize,
+    defaultImageSize: resolved.config.preset?.defaultImageSize,
+  })
 
   // 参考文件（图像编辑 / 声音克隆样本）
   const refKey = modality === 'audio' ? 'referencePaths' : 'referenceImagePaths'
@@ -335,19 +489,23 @@ export async function runGeneration(
     && resolved.config.supportsEdit
     && modality !== 'audio'
     && resolved.config.protocol !== 'gemini-generate-content'
+    && sessionId
   ) {
     const last = getLastGenerated(modality, sessionId)
     if (last) referencePaths = [last]
   }
   const isEdit = !!(referencePaths && referencePaths.length > 0)
 
+  const referenceReadBudget = { remainingBytes: policy.maxInputBytes }
+  mkdirSync(ctx.outputDir, { recursive: true })
   const { images: generated } = await generateMedia({
     modality,
     prompt,
     config: resolved.config,
     apiKey: resolved.apiKey,
     size: optionalStringArg(args, 'size'),
-    numberOfImages: typeof args.numberOfVideos === 'number' ? args.numberOfVideos : (typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined),
+    numberOfImages: modality === 'image' && typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined,
+    numberOfVideos: modality === 'video' && typeof args.numberOfVideos === 'number' ? args.numberOfVideos : undefined,
     duration: optionalNumberArg(args, 'duration'),
     referencePaths,
     lastFramePath: optionalStringArg(args, 'lastFrameImagePath', 'last_frame_image_path', 'lastFramePath', 'last_frame_path'),
@@ -386,7 +544,7 @@ export async function runGeneration(
     audioFormat: optionalEnumStringArg(args, ['mp3', 'wav', 'flac', 'pcm'] as const, 'audioFormat', 'audio_format'),
     instruction: optionalStringArg(args, 'instruction'),
     // task 枚举校验：非法值直接抛错，避免自定义配置下静默落到 TTS 分支（用错误模型请求 TTS）。
-    audioTask: requireEnumArg(args, ['tts', 'music', 'clone'] as const, 'task', 'task'),
+    audioTask: requireEnumArg(args, ['tts', 'music', 'clone'] as const, 'task'),
     voice: optionalStringArg(args, 'voice'),
     lyrics: optionalStringArg(args, 'lyrics'),
     instrumental: optionalBoolArg(args, 'instrumental', 'isInstrumental'),
@@ -397,6 +555,9 @@ export async function runGeneration(
     coverFeatureId: optionalStringArg(args, 'coverFeatureId', 'cover_feature_id'),
     aigcWatermark: optionalBoolArg(args, 'aigcWatermark', 'aigc_watermark'),
     cwd: ctx.outputDir,
+    allowedInputRoots: policy.allowedInputDirs,
+    maxInputBytes: policy.maxInputBytes,
+    referenceReadBudget,
     sessionId,
     signal: ctx.signal,
   })
@@ -404,8 +565,14 @@ export async function runGeneration(
   // 仅图像走数量裁剪。显式 numberOfImages 优先；未显式指定时传 undefined，
   // 让引擎回退到从 prompt 解析数量词（如"生成 4 张图"），否则多图会被静默裁成 1 张。
   const selected = modality === 'image'
-    ? selectGeneratedImagesForImageRequest(generated, { userMessage: prompt, defaultCount: typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined })
-    : generated
+    ? selectGeneratedImagesForImageRequest(generated, {
+      userMessage: prompt,
+      defaultCount: typeof args.numberOfImages === 'number' ? args.numberOfImages : undefined,
+      maxCount: policy.maxOutputs,
+    })
+    : modality === 'video'
+      ? generated.slice(0, policy.maxOutputs)
+      : generated
 
   const modalityLabel = modality === 'image' ? '图片' : modality === 'video' ? '视频' : '音频'
   const outDir = resolve(ctx.outputDir, 'generated-media')
@@ -421,12 +588,15 @@ export async function runGeneration(
     : resolved.config.model
   const providerTag = vendor ? `${vendor}${routedModel ? ' · ' + routedModel : ''}` : (routedModel || '')
   const customName = optionalStringArg(args, 'filename')
-  const { content, savedPaths } = persistGenerated(selected, modalityLabel, { outputDir: outDir }, customName, providerTag)
+  const { content, savedPaths } = persistGenerated(selected, modalityLabel, {
+    outputDir: outDir,
+    maxInlineBytes: policy.maxInlineBytes,
+  }, customName, providerTag)
 
   // 多轮：缓存首项路径
-  if (savedPaths.length > 0) setLastGenerated(modality, sessionId, savedPaths[0]!)
+  if (sessionId && savedPaths.length > 0) setLastGenerated(modality, sessionId, savedPaths[0]!)
 
-  return { content }
+  return { content, outputCount: selected.length }
 }
 
 // ===== 创建 MCP Server（底层 Server API + JSON Schema） =====
@@ -437,36 +607,27 @@ export async function runGeneration(
  * @param outputDirOverride 可选输出目录覆盖（默认用 config.outputDir 或 getDefaultOutputDir()）
  */
 export function createMcpServer(outputDirOverride?: string): Server {
-  const config = loadConfig()
-  const outputDir = resolve(outputDirOverride || config.outputDir || getDefaultOutputDir())
-
-  // 候选工具列表（按已配置好的模态过滤）
-  const candidates: ToolDefinition[] = [
-    { name: 'generate_image', description: buildImageDescription(config), modality: 'image', inputSchema: IMAGE_SCHEMA },
-    { name: 'generate_video', description: buildVideoDescription(), modality: 'video', inputSchema: VIDEO_SCHEMA },
-    { name: 'generate_audio', description: buildAudioDescription(config), modality: 'audio', inputSchema: AUDIO_SCHEMA },
-  ]
-
-  const tools = candidates.filter((def) => isModalityReady(config, def.modality))
-
   const server = new Server(
     { name: 'prismstudio', version: PACKAGE_VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: { listChanged: true } } },
   )
 
-  // 列出工具
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((def) => ({
+  // 每次读取最新配置：WebUI 或手工改配置后，无需重启 MCP 进程即可刷新工具清单与描述。
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const tools = buildAvailableTools(loadConfig())
+    return { tools: tools.map((def) => ({
       name: def.name,
       description: def.description,
       inputSchema: def.inputSchema,
-    })),
-  }))
+    })) }
+  })
 
   // 调用工具（失败软降级：返回 isError 文本而非抛异常，与 Run 一致）
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const toolName = request.params.name
-    const args = (request.params.arguments ?? {}) as Record<string, unknown>
+    const args = request.params.arguments ?? {}
+    const config = loadConfig()
+    const tools = buildAvailableTools(config)
     const def = tools.find((t) => t.name === toolName)
     if (!def) {
       return {
@@ -475,14 +636,39 @@ export function createMcpServer(outputDirOverride?: string): Server {
       }
     }
     try {
-      const { content } = await runGeneration(def.modality, args, {
-        outputDir,
-        sessionId: extra.sessionId,
-        signal: extra.signal,
-      })
-      return { content }
+      const normalizedArgs = validateMcpToolArguments(def.modality, args)
+      const startedAt = Date.now()
+      const requestId = randomUUID()
+      const resolvedForLog = resolveModality(config, def.modality)
+      try {
+        const { content, outputCount } = await runGeneration(def.modality, normalizedArgs, {
+          outputDir: resolve(outputDirOverride || config.outputDir || getDefaultOutputDir()),
+          sessionId: extra.sessionId,
+          signal: extra.signal,
+        })
+        writeGenerationDiagnostic(config, {
+          requestId, source: 'mcp', outcome: 'success', modality: def.modality,
+          protocol: resolvedForLog?.config.protocol,
+          vendor: resolvedForLog?.config.preset?.vendor,
+          model: resolvedForLog?.config.model,
+          elapsedMs: Date.now() - startedAt,
+          outputCount,
+        }, diagnosticSecretsForArguments(normalizedArgs))
+        return { content }
+      } catch (err) {
+        writeGenerationDiagnostic(config, {
+          requestId, source: 'mcp', outcome: 'error', modality: def.modality,
+          protocol: resolvedForLog?.config.protocol,
+          vendor: resolvedForLog?.config.preset?.vendor,
+          model: resolvedForLog?.config.model,
+          elapsedMs: Date.now() - startedAt,
+          error: err instanceof Error ? err.message : String(err),
+        }, diagnosticSecretsForArguments(normalizedArgs))
+        throw err
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const rawMessage = err instanceof Error ? err.message : String(err)
+      const msg = redactSensitiveText(rawMessage, collectConfigSecrets(config))
       const label = def.modality === 'image' ? '图片' : def.modality === 'video' ? '视频' : '音频'
       return {
         content: [{ type: 'text', text: `${label}生成失败: ${msg}` }],
@@ -492,6 +678,75 @@ export function createMcpServer(outputDirOverride?: string): Server {
   })
 
   return server
+}
+
+function schemaForPolicy(schema: Record<string, unknown>, modality: MediaModality, config: DuoConfig): Record<string, unknown> {
+  const policy = resolveGenerationPolicy(config)
+  const cloned = JSON.parse(JSON.stringify(schema)) as { properties?: Record<string, Record<string, unknown>> }
+  if (modality === 'image') {
+    if (cloned.properties?.numberOfImages) cloned.properties.numberOfImages.maximum = policy.maxOutputs
+    const imageSize = cloned.properties?.imageSize
+    if (imageSize && Array.isArray(imageSize.enum) && !policy.allow4k) {
+      imageSize.enum = imageSize.enum.filter((value) => value !== '4K')
+    }
+  } else if (modality === 'video') {
+    if (cloned.properties?.numberOfVideos) cloned.properties.numberOfVideos.maximum = policy.maxOutputs
+    if (cloned.properties?.duration) cloned.properties.duration.maximum = policy.maxVideoDurationSec
+  }
+  return cloned as Record<string, unknown>
+}
+
+export function buildAvailableTools(config: DuoConfig): ToolDefinition[] {
+  const candidates: ToolDefinition[] = [
+    { name: 'generate_image', description: buildImageDescription(config), modality: 'image', inputSchema: schemaForPolicy(IMAGE_SCHEMA, 'image', config) },
+    { name: 'generate_video', description: buildVideoDescription(), modality: 'video', inputSchema: schemaForPolicy(VIDEO_SCHEMA, 'video', config) },
+    { name: 'generate_audio', description: buildAudioDescription(config), modality: 'audio', inputSchema: AUDIO_SCHEMA },
+  ]
+  return candidates.filter((def) => isModalityReady(config, def.modality))
+}
+
+export interface ConfigWatchOptions {
+  intervalMs?: number
+  debounceMs?: number
+}
+
+/**
+ * 监听配置文件并通知支持 listChanged 的 MCP 客户端重新拉取工具清单。
+ * 使用 watchFile 的轮询语义，可正确感知 saveConfig 的原子 rename，也兼容文件从无到有。
+ */
+export function watchConfigForToolChanges(server: Server, options: ConfigWatchOptions = {}): () => void {
+  const path = getConfigPath()
+  const intervalMs = Math.max(50, options.intervalMs ?? 500)
+  const debounceMs = Math.max(0, options.debounceMs ?? 100)
+  let stopped = false
+  let timer: NodeJS.Timeout | undefined
+
+  const notify = () => {
+    if (stopped) return
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = undefined
+      void server.sendToolListChanged().catch((err) => {
+        process.stderr.write(`[prismstudio] 工具清单变更通知失败：${err instanceof Error ? err.message : String(err)}\n`)
+      })
+    }, debounceMs)
+    timer.unref?.()
+  }
+  const listener = (current: Stats, previous: Stats) => {
+    if (
+      current.mtimeMs !== previous.mtimeMs
+      || current.size !== previous.size
+      || current.ino !== previous.ino
+      || current.nlink !== previous.nlink
+    ) notify()
+  }
+
+  watchFile(path, { persistent: false, interval: intervalMs }, listener)
+  return () => {
+    stopped = true
+    if (timer) clearTimeout(timer)
+    unwatchFile(path, listener)
+  }
 }
 
 /** 连接 server 到 stdio transport（供 CLI 入口调用） */

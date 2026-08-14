@@ -68,7 +68,10 @@ Prismstudio 是一个遵循 [Model Context Protocol](https://modelcontextprotoco
 - **多模态全覆盖**：文生图、图生图/编辑、文生视频、图生视频、TTS 语音合成、音乐生成、声音克隆
 - **内嵌 WebUI**：配置台、试用台、接入向导三合一，零配置门槛，不用手写 JSON；API Key 眼睛切换、完整请求地址与接口协议一目了然
 - **动态工具暴露**：只有配置好的模态才会暴露给 agent，不产生空壳工具
-- **本地优先**：凭证明文存在本地 `~/.prismstudio/config.json`，WebUI 仅绑定 `127.0.0.1`，不上传任何数据
+- **本地运行策略**：可限制单次数量、视频时长、4K 与内联体积，在付费请求发出前拦截
+- **安全素材白名单**：输出目录默认可读，额外参考素材目录需显式加入允许列表
+- **可选环境变量密钥**：配置文件只保存变量名，不必保存真实 API Key
+- **本地优先**：凭证明文存在本地 `~/.prismstudio/config.json`，WebUI 仅绑定 `127.0.0.1`；软件不发送遥测，但 prompt、参考素材和生成请求会按用户配置直接发送给对应 provider
 
 ---
 
@@ -180,6 +183,7 @@ npx -y prismstudio@latest webui
 - 只有这条命令运行时才会占用 `17899` 端口
 - 关掉终端或按 `Ctrl+C` 后，WebUI 会停止，不再占用电脑内存 / CPU
 - 配置会保存到本地 `~/.prismstudio/config.json`，不会因为 WebUI 关闭而丢失
+- 已运行的 MCP Server 会监听配置变化；支持 MCP `tools/list_changed` 的 agent 可自动刷新工具清单，旧客户端可能仍需重启
 - 以后需要换模型、改 API Key、测试生成时，再运行同一条命令打开即可
 - 设置好一次后，日常在 agent 里生成图片 / 视频 / 音频**不需要 WebUI 常驻**
 
@@ -271,7 +275,8 @@ prismstudio                       # 以 stdio MCP 模式运行（默认，供 ag
 prismstudio webui                 # 启动本地 WebUI 配置台（等价于 --webui）
 prismstudio --webui               # 启动本地 WebUI 配置台（浏览器打开 127.0.0.1:<port>）
 prismstudio --webui --port 8080   # 指定 WebUI 端口（默认 17899）
-prismstudio --output-dir <path>   # 覆盖生成物输出目录
+prismstudio --output-dir <path>   # 覆盖生成物输出根目录（实际写入其 generated-media 子目录）
+prismstudio diagnostics           # 输出脱敏诊断、就绪模态、策略与适配器信息
 prismstudio --version             # 显示版本号
 prismstudio --help                # 显示帮助
 ```
@@ -296,13 +301,17 @@ prismstudio --help                # 显示帮助
 
 每个工具支持丰富的厂商专属参数（如 OpenAI 的 `quality`/`background`、Gemini 的 `aspectRatio`/`imageSize`、Stability 的 `stylePreset`、视频的 `withAudio`/`frames` 等），详见各工具的 `inputSchema`。
 
-**生成产物**会保存到 `<输出目录>/generated-media/`：
-- 如果没有手动设置 `outputDir`，默认输出目录是 `~/.prismstudio/generated-media/`
-- WebUI 试用台的临时试用产物默认保存在 `~/.prismstudio/playground/`
-- 图片 / 音频同时以 base64 内联回传给 agent，便于直接预览
-- 视频体积大，仅返回本地路径
+**安全使用多轮编辑：** 对同一段图片/视频连续迭代时，在每次 `generate_image` 或 `generate_video` 调用中复用同一个 `sessionId`，例如 `"sessionId": "image-edit-20260811-a"`。它必须是 1–128 位的无语义标识，以字母或数字开头，后续只可使用字母、数字、点、下划线或连字符；不要在其中放入提示词、文件路径、姓名或 API Key。不同对话必须使用不同 ID。stdio MCP 客户端没有稳定的传输会话标识，因此需要显式传这个字段；省略它时不会自动复用上一轮生成物或会话历史。兼容旧客户端的 `session_id` 仍可使用，但建议新调用统一使用 `sessionId`。
 
-> `~/.prismstudio` 是用户主目录下的隐藏文件夹（文件夹名前有一个点）。配置文件、默认生成产物和 WebUI 试用产物都会放在这里。
+**生成产物**会保存到 `<输出目录>/generated-media/`：
+- 如果没有手动设置 `outputDir`，默认输出目录是 `~/prismstudio/generated-media/`
+- WebUI 试用台的临时试用产物默认保存在 `~/prismstudio/playground/`
+- 图片 / 音频同时以 base64 内联回传给 agent，便于直接预览
+- 图片 / 音频默认只在解码后不超过 8 MiB 时内联；超过阈值仅返回本地路径
+- 视频体积大，仅返回本地路径
+- 若本地输出目录临时不可写，图片 / 音频会作为紧急回退以内联数据返回，避免已计费结果丢失；视频无法安全返回时会明确报错，而不会伪装为成功
+
+> `~/.prismstudio` 是用户主目录下的隐藏配置文件夹（文件夹名前有一个点），只保存配置与密钥；生成物默认放在非隐藏的 `~/prismstudio/`，方便直接查看。
 
 **如何查看隐藏文件夹：**
 
@@ -326,21 +335,36 @@ prismstudio --help                # 显示帮助
     "enabled": true,
     "presetId": "openai-gpt-image-2",  // 预设 ID，或 "custom" 手动指定
     "apiKey": "sk-...",                  // 明文存储
+    "apiKeyEnv": "OPENAI_API_KEY",       // 可选；apiKey 为空时从环境变量读取
     "model": "...",                      // 可选，覆盖预设模型（仅 custom 必填）
     "protocol": "openai-images",         // 可选，仅 custom 时有意义
     "baseUrl": "..."                     // 可选，覆盖预设 endpoint
   },
   "video": { /* ... */ },
   "audio": { /* ... */ },
-  "outputDir": "/path/to/out"           // 可选，生成物输出目录
+  "outputDir": "/path/to/out",          // 可选，生成物输出根目录
+  "policy": {
+    "maxOutputs": 4,
+    "maxVideoDurationSec": 15,
+    "allow4k": true,
+    "maxInlineMiB": 8,
+    "maxInputMiB": 128,
+    "allowedInputDirs": ["/path/to/assets"]
+  },
+  "diagnostics": {
+    "enabled": false,
+    "logFile": "/path/to/diagnostics.jsonl"
+  }
 }
 ```
+
+明文 `apiKey` 优先于 `apiKeyEnv`。使用环境变量时，需要确保启动 MCP Server 的 agent 进程能够继承该变量。`maxInputMiB` 限制一次请求中所有本地参考图片、音频和视频的累计读取量。诊断日志尽量不记录提示词、凭据、参考路径或输出路径，并在 5 MiB 时滚动；已知请求上下文会在错误落盘前再次脱敏。
 
 > **同厂商 Key 记忆**：每个模态按厂商（vendor）单独记忆 API Key（存在 `apiKeyByVendor`，并兼容旧的 `apiKeyByPreset`）。同一模态内切换同厂商模型无需重填；图片 / 视频 / 音频三类工具之间不强制共用。
 >
 > **火山引擎接入分组**：因鉴权方式不同，火山引擎在配置台里拆成三个独立 vendor：**火山 API**（普通方舟 Ark key）、**火山 Agent Plan**（Agent Plan 独立 key）、**火山语音**（语音服务独立 key）。三组各自记忆 Key，互不覆盖。
 
-> **安全说明**：凭证以明文存储（与 MCP 生态惯例一致）。WebUI 仅绑定 `127.0.0.1`，不加载第三方 CDN 脚本/字体，并通过安全响应头、Origin / Sec-Fetch-Site 校验与 JSON Content-Type 校验降低本机跨站请求风险。生产环境请自行做好文件权限管控。详见 [SECURITY.md](SECURITY.md)。
+> **安全说明**：直接填写的凭证以明文存储（与 MCP 生态惯例一致），也可用 `apiKeyEnv` 避免真实密钥写入配置。WebUI 仅绑定 `127.0.0.1`，不加载第三方 CDN 脚本/字体，并通过安全响应头、Origin / Sec-Fetch-Site 校验与 JSON Content-Type 校验降低本机跨站请求风险。详见 [SECURITY.md](SECURITY.md)。
 
 ---
 
@@ -358,6 +382,10 @@ bun run dev:webui        # WebUI 模式
 bun run typecheck        # 类型检查
 bun test                 # 测试套件
 bun run build            # 构建到 dist/
+bun run check            # 类型检查 + 全量测试 + 构建
+
+# 可选：真实 provider 契约冒烟测试；可能产生费用，默认拒绝执行
+PRISMSTUDIO_RUN_PAID_CONTRACT_TESTS=1 bun run contract:smoke -- image
 
 # 测试 stdio 握手
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' | bun run dev
@@ -390,9 +418,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 | 模块 | 职责 |
 |---|---|
-| `src/engine/media-generation-engine.ts` | 生成内核，按「模态 × 协议族」分派，裸 `fetch` 调用各 provider |
+| `src/engine/media-generation-engine.ts` | 生成内核与协议适配器注册表，裸 `fetch` 调用各 provider |
 | `src/engine/google-auth.ts` | Google Vertex / Gemini 服务账号鉴权 |
 | `src/config.ts` | 配置读写，把结构化配置转成引擎所需的 flat credentials |
+| `src/policy.ts` | 生成前成本与资源策略校验 |
+| `src/diagnostics.ts` | 脱敏 JSONL 诊断与日志滚动 |
 | `src/persist.ts` | 生成产物落盘 + 构造 MCP content 块（纯 `node:fs`） |
 | `src/mcp-server.ts` | 底层 Server + JSON Schema 注册工具，串联引擎/配置/落盘 |
 | `src/index.ts` | CLI 入口，分流 stdio / `--webui` 两种模式 |

@@ -23,6 +23,13 @@ bun run dev:webui    # 以 WebUI 模式开发（浏览器打开 127.0.0.1:17899�
 bun run typecheck    # 类型检查（tsc --noEmit）
 bun test             # 跑测试套件
 bun run build        # 构建到 dist/
+bun run check        # 依次执行类型检查、全量测试和构建
+```
+
+真实 provider 契约冒烟测试默认拒绝执行，避免 CI 或本地开发误产生费用。只有在明确准备好凭证和费用预算时才运行：
+
+```bash
+PRISMSTUDIO_RUN_PAID_CONTRACT_TESTS=1 bun run contract:smoke -- image
 ```
 
 测试 stdio 握手：
@@ -37,6 +44,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 |---|---|
 | `src/engine/` | 生成引擎内核：协议分派、各家 provider 适配、模型预设表 |
 | `src/config.ts` | 配置读写，结构化配置 ↔ 引擎 flat credentials 转换 |
+| `src/policy.ts` | 上游请求前的数量、时长、4K 与输入目录策略 |
+| `src/diagnostics.ts` | 本地脱敏 JSONL 诊断与滚动 |
 | `src/persist.ts` | 生成产物落盘 + MCP content 块构造 |
 | `src/mcp-server.ts` | 底层 MCP Server + 工具注册 |
 | `src/index.ts` | CLI 入口 |
@@ -47,9 +56,10 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 ## 加一个新的模型预设
 
 1. 在 `src/engine/media-generation-engine.ts` 的 `MEDIA_MODEL_PRESETS` 里加一条：`{ id, modality, protocol, vendor, name, model, baseUrl, ... }`
-2. 如果是新协议族（`protocol`），在引擎里实现对应的 `dispatch` 分支（请求构造 + 响应解析 + 轮询/同步逻辑）
-3. 加测试到 `src/engine/media-generation-engine.test.ts`，跑 `bun test` 确认通过
+2. 如果是新协议族（`protocol`），实现独立 provider 调用函数，并在 `MEDIA_ADAPTER_REGISTRY` 注册对应的 `modality + protocol (+ audio task)` 路由；不要继续扩大 `generateMedia()` 的条件分支
+3. 加测试到 `src/engine/media-generation-engine.test.ts`，同时断言注册表路由与实际请求行为
 4. 如果有厂商专属参数，记得在 `src/mcp-server.ts` 对应的 `*_SCHEMA` 里加上，并在 `runGeneration` 里透传
+5. 运行 `bun run check`；如需真实契约测试，必须使用上面的显式 opt-in，并在 PR 中说明产生了哪些外部请求
 
 ## Commit 规范
 
@@ -65,7 +75,7 @@ docs: 完善 README
 ## 提交 PR
 
 1. 从 `main` 拉分支：`feat/xxx`、`fix/xxx`、`docs/xxx`
-2. 保证 `bun run typecheck` 与 `bun test` 都通过
+2. 保证 `bun run check` 通过，并保持 `bun.lock` 与 `package-lock.json` 同步
 3. 如果加了功能/修了 bug，补测试
 4. PR 描述说清楚动机、改动点、是否有破坏性变更
 

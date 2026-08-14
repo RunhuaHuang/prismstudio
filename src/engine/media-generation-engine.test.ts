@@ -15,6 +15,8 @@ import {
   readReferenceFiles,
   isPathWithinRoot,
   selectGeneratedImagesForImageRequest,
+  listRegisteredMediaAdapters,
+  hasRegisteredMediaAdapter,
 } from './media-generation-engine'
 import type { ResolvedMediaConfig } from './media-generation-engine'
 
@@ -109,6 +111,17 @@ function mockGoogleTokenExchange(accessToken = 'vertex-token'): void {
 // ===== 预设解析 =====
 
 describe('media-generation-engine · 预设', () => {
+  test('协议适配器注册表覆盖三模态核心路由且无重复键', () => {
+    const adapters = listRegisteredMediaAdapters()
+    expect(new Set(adapters).size).toBe(adapters.length)
+    expect(adapters).toContain('image:openai-images')
+    expect(adapters).toContain('video:google-interactions')
+    expect(adapters).toContain('audio:minimax:music')
+    expect(adapters).toContain('audio:minimax-tts-async:tts')
+    for (const preset of MEDIA_MODEL_PRESETS) {
+      expect(hasRegisteredMediaAdapter(preset.modality, preset.protocol, preset.audioTask)).toBe(true)
+    }
+  })
   test('MEDIA_MODEL_PRESETS 覆盖三模态主流厂商', () => {
     const byModality = { image: 0, video: 0, audio: 0 }
     for (const p of MEDIA_MODEL_PRESETS) byModality[p.modality]++
@@ -156,6 +169,11 @@ describe('media-generation-engine · 预设', () => {
 
   test('resolveMediaConfig 缺 model 返回 null', () => {
     expect(resolveMediaConfig({ apiKey: 'k' }, 'image')).toBeNull()
+  })
+
+  test('resolveMediaConfig 拒绝未知协议和跨模态不支持的协议', () => {
+    expect(resolveMediaConfig({ model: 'custom', protocol: 'not-real' }, 'image')).toBeNull()
+    expect(resolveMediaConfig({ model: 'custom', protocol: 'kling-async' }, 'image')).toBeNull()
   })
 
   test('预设模式下用户覆盖的 protocol 与 baseUrl 生效（不被 preset 强制覆盖）', () => {
@@ -606,6 +624,20 @@ describe('media-generation-engine · 图像 stability', () => {
       config: makeImageConfig({ modality: 'image', protocol: 'stability', baseUrl: 'https://api.stability.ai/v2beta/stable-image/generate', model: 'sd3' }),
       fetchFn,
     })).rejects.toThrow(/未返回图片数据/)
+  })
+
+  test('numberOfImages > 1 时串行发起多次请求而非静默只回一张', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { image: 'IMG1' } },
+      { ok: true, json: { image: 'IMG2' } },
+    ])
+    const r = await generateMedia({
+      modality: 'image', prompt: 'a cat', apiKey: 'sk-stab', numberOfImages: 2,
+      config: makeImageConfig({ modality: 'image', protocol: 'stability', baseUrl: 'https://api.stability.ai/v2beta/stable-image/generate', model: 'sdxl' }),
+      fetchFn,
+    })
+    expect(calls.length).toBe(2)
+    expect(r.images.map((i) => i.data)).toEqual(['IMG1', 'IMG2'])
   })
 })
 
@@ -1569,6 +1601,21 @@ describe('media-generation-engine · 视频', () => {
     expect(r.images[0]!.mediaType).toBe('video/mp4')
   })
 
+  test('tencent-hunyuan-async accepts the alternate array-shaped task result', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { code: 0, data: { id: 'hy-array-task' } } },
+      { ok: true, json: { code: 0, data: [{ status: 'SUCCEEDED', image_url: 'https://tokenhub/array.png' }] } },
+      { ok: true, headers: { 'content-type': 'image/png' } },
+    ])
+    const result = await generateMedia({
+      modality: 'image', prompt: '一朵花', apiKey: 'tokenhub-secret', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'image', protocol: 'tencent-hunyuan-async', baseUrl: 'https://tokenhub.tencentmaas.com/v1', model: 'hy-image-v3.0' }),
+      fetchFn,
+    })
+    expect(result.images).toHaveLength(1)
+    expect(result.images[0]!.mediaType).toBe('image/png')
+  })
+
   test('TokenHub 图生视频参考图同时传 image/first_frame_image Data URI', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'run-tokenhub-i2v-'))
     const ref = join(cwd, 'ref.png')
@@ -1839,6 +1886,7 @@ describe('media-generation-engine · 视频', () => {
   })
 
   test('H3 轮询响应缺 task.status 时立即报错', async () => {
+    // 收敛到 assertKnownActivePollStatus 后，统一用"缺少状态字段"措辞。
     const { fetchFn } = makeSequencedFetch([
       { ok: true, json: { task_id: 'h3-nostatus' } },
       { ok: true, json: { task: {} } },
@@ -1847,7 +1895,7 @@ describe('media-generation-engine · 视频', () => {
       modality: 'video', prompt: '测试', apiKey: 'k', pollIntervalMs: 0,
       config: makeImageConfig({ modality: 'video', protocol: 'minimax-video-v2', baseUrl: 'https://api.minimax.io/v2', model: 'MiniMax-H3', preset: null }),
       fetchFn,
-    })).rejects.toThrow(/缺少 task.status/)
+    })).rejects.toThrow(/缺少状态字段/)
   })
 
   // 回归：H3 支持从 prompt 解析时长（与其他视频协议一致）。
@@ -2028,6 +2076,37 @@ describe('media-generation-engine · 视频', () => {
     expect(body.generationConfig.responseModalities).toEqual(['TEXT', 'IMAGE'])
     expect(body.generationConfig.imageConfig.aspectRatio).toBe('16:9')
     expect(r.images[0]!.data).toBe('IMGBASE64')
+  })
+
+  test('Gemini 未提供 sessionId 时保持无状态，不复用其它调用的历史', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { candidates: [{ content: { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'FIRST' } }] } }] } },
+      { ok: true, json: { candidates: [{ content: { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'SECOND' } }] } }] } },
+    ])
+    const config = makeImageConfig({ modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-test' })
+    await generateMedia({ modality: 'image', prompt: 'first', apiKey: 'AIza-test', config, fetchFn })
+    await generateMedia({ modality: 'image', prompt: 'second', apiKey: 'AIza-test', config, fetchFn })
+    expect(JSON.parse(calls[0]!.body!).contents).toHaveLength(1)
+    expect(JSON.parse(calls[1]!.body!).contents).toHaveLength(1)
+    expect(JSON.parse(calls[1]!.body!).contents[0].parts[0].text).toBe('second')
+  })
+
+  test('Gemini 仅在相同显式 sessionId 下续接历史', async () => {
+    const sessionId = `gemini-history-${Date.now()}`
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { candidates: [{ content: { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'FIRST' } }] } }] } },
+      { ok: true, json: { candidates: [{ content: { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data: 'SECOND' } }] } }] } },
+    ])
+    const config = makeImageConfig({ modality: 'image', protocol: 'gemini-generate-content', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-test' })
+    try {
+      await generateMedia({ modality: 'image', prompt: 'first', apiKey: 'AIza-test', config, fetchFn, sessionId })
+      await generateMedia({ modality: 'image', prompt: 'second', apiKey: 'AIza-test', config, fetchFn, sessionId })
+      const contents = JSON.parse(calls[1]!.body!).contents
+      expect(contents).toHaveLength(3)
+      expect(contents.map((item: { role: string }) => item.role)).toEqual(['user', 'model', 'user'])
+    } finally {
+      clearMediaGenerationSessionHistory(sessionId)
+    }
   })
 
   test('gemini-generate-content：IMAGE_SAFETY 拦截时给出可读错误而非崩溃', async () => {
@@ -2375,7 +2454,9 @@ describe('media-generation-engine · 视频', () => {
       config: makeImageConfig({ modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-omni-flash-preview' }),
       fetchFn,
     })
-    expect(calls[0]!.url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions?key=google-key')
+    // API Key 只走 x-goog-api-key 头，绝不进 URL query（防代理/网关日志泄漏）。
+    expect(calls[0]!.url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions')
+    expect(calls[0]!.headers.get('x-goog-api-key')).toBe('google-key')
     expect(calls[0]!.method).toBe('POST')
     const body = JSON.parse(calls[0]!.body!)
     expect(body.model).toBe('gemini-omni-flash-preview')
@@ -2456,6 +2537,170 @@ describe('media-generation-engine · 视频', () => {
       config: makeImageConfig({ modality: 'video', protocol: 'google-interactions', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-omni-flash-preview' }),
       fetchFn,
     })).rejects.toThrow('Google Omni 视频生成失败: bad prompt')
+  })
+
+  // ===== 轮询器：未知/缺失状态立即报错，不静默空转到硬超时（与 pollTask/H3 一致）=====
+
+  test('Seedance 轮询遇到未知状态立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: true, json: { id: 'task-1', status: 'WEIRD_NEW_STATE' } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('未知任务状态')
+  })
+
+  test('Seedance 轮询瞬时失败（502）退避重试后恢复，不放弃已提交任务', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: false, status: 502, text: 'bad gateway' },
+      { ok: false, status: 429, text: 'rate limited' },
+      { ok: true, json: { id: 'task-1', status: 'succeeded', content: { video_url: 'https://cdn.example.com/v.mp4' } } },
+      { ok: true, arrayBuffer: new ArrayBuffer(4) },
+    ])
+    const r = await generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })
+    expect(r.images.length).toBe(1)
+    // 5 次调用 = 1 提交 + 3 轮询（2 次瞬时失败 + 1 次成功）+ 1 次视频下载，说明瞬时错误被容忍而非放弃
+    expect(calls.length).toBe(5)
+  })
+
+  test('Seedance 轮询连续 3 次瞬时失败才报错，且错误保留 task_id', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-tolerant' } },
+      { ok: false, status: 502, text: 'bad gateway 1' },
+      { ok: false, status: 502, text: 'bad gateway 2' },
+      { ok: false, status: 503, text: 'unavailable' },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('task-tolerant')
+  })
+
+  test('Seedance 轮询 4xx 永久错误不重试立即抛出', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: false, status: 401, text: 'unauthorized' },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('401')
+    expect(calls.length).toBe(2)
+  })
+
+  test('Seedance duration 本地校验：非 5~12 整数秒直接抛错', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 7.5, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('整数秒')
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 20, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('5~12')
+    expect(calls.length).toBe(0)
+  })
+
+  test('可灵 duration 本地校验：仅允许 5 或 10 秒', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', duration: 3, pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'kling-async', baseUrl: 'https://api.klingai.com', model: 'kling-v2' }),
+      fetchFn,
+    })).rejects.toThrow('5 或 10 秒')
+    expect(calls.length).toBe(0)
+  })
+
+  test('Seedance 轮询响应缺少状态字段立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { id: 'task-1' } },
+      { ok: true, json: { id: 'task-1' } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'volcengine-async', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedance-2-0-260128' }),
+      fetchFn,
+    })).rejects.toThrow('缺少状态字段')
+  })
+
+  test('可灵轮询遇到未知状态立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { data: { task_id: 'kt' } } },
+      { ok: true, json: { data: { task_status: 'unexpected' } } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'kling-async', baseUrl: 'https://api.klingai.com', model: 'kling-v2' }),
+      fetchFn,
+    })).rejects.toThrow('未知任务状态')
+  })
+
+  test('MiniMax 视频轮询遇到未知状态立即报错', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mt' } },
+      { ok: true, json: { status: 'Queuing' } },
+      { ok: true, json: { status: 'SomeUnknownState' } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'video-01' }),
+      fetchFn,
+    })).rejects.toThrow('未知任务状态')
+  })
+
+  test('MiniMax 视频成功状态大小写不敏感（小写 success 也命中）', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { task_id: 'mt' } },
+      { ok: true, json: { status: 'success', videos: [{ url: 'https://mm/v.mp4' }] } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    const r = await generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'k', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'video-01' }),
+      fetchFn,
+    })
+    expect(r.images[0]!.mediaType).toBe('video/mp4')
+  })
+
+  test('可灵 ak:sk 凭据走 JWT 鉴权，绝不发送明文 ak:sk', async () => {
+    const { fetchFn, calls } = makeSequencedFetch([
+      { ok: true, json: { data: { task_id: 'kt' } } },
+      { ok: true, json: { data: { task_status: 'succeed', task_result: { videos: [{ url: 'https://k/v.mp4' }] } } } },
+      { ok: true, headers: { 'content-type': 'video/mp4' } },
+    ])
+    await generateMedia({
+      modality: 'video', prompt: 'x', apiKey: 'myak:mysk', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'kling-async', baseUrl: 'https://api.klingai.com', model: 'kling-v2' }),
+      fetchFn,
+    })
+    const auth = calls[0]!.headers.get('Authorization') ?? ''
+    expect(auth.startsWith('Bearer ')).toBe(true)
+    // JWT 是 header.payload.signature 三段（含两个 '.'）；绝不是原始 ak:sk 明文。
+    expect(auth.slice('Bearer '.length).split('.')).toHaveLength(3)
+    expect(auth).not.toBe('Bearer myak:mysk')
+  })
+
+  test('可灵畸形 ak:sk（一侧为空）直接抛错，不发送明文凭据', async () => {
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { data: { task_id: 'kt' } } },
+    ])
+    await expect(generateMedia({
+      modality: 'video', prompt: 'x', apiKey: ':onlysk', pollIntervalMs: 0,
+      config: makeImageConfig({ modality: 'video', protocol: 'kling-async', baseUrl: 'https://api.klingai.com', model: 'kling-v2' }),
+      fetchFn,
+    })).rejects.toThrow('格式无效')
   })
 })
 
@@ -2836,6 +3081,22 @@ describe('media-generation-engine · 音频', () => {
     expect(body.lyrics).toBe('[verse]\nhello')
     expect(r.images[0]!.data).toBe('SUQzBA==')
     expect(r.images[0]!.mediaType).toBe('audio/mpeg')
+  })
+
+  // 回归：music-3.0 / 第三方网关可能返回 base64 而非 hex。自适应解码应原样返回 base64，
+  // 而不是按硬性 hex 校验直接丢弃已计费的生成物。
+  test('minimax music：data.audio 为 base64 时原样返回（自适应解码，兼容 music-3.0）', async () => {
+    // 含 +/ 的合法 base64，不是有效 hex，也不以已知音频 magic 开头。
+    const base64Audio = 'AAA+++///BBBB'
+    const { fetchFn } = makeSequencedFetch([
+      { ok: true, json: { data: { audio: base64Audio, status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } } },
+    ])
+    const r = await generateMedia({
+      modality: 'audio', prompt: 'happy jazz', lyrics: '[verse]\nhello', apiKey: 'k', audioTask: 'music',
+      config: makeImageConfig({ modality: 'audio', protocol: 'minimax', baseUrl: 'https://api.minimax.chat/v1', model: 'music-3.0', audioTask: 'music' }),
+      fetchFn,
+    })
+    expect(r.images[0]!.data).toBe(base64Audio)
   })
 
   // 回归：脏配置——模型是 music-2.6 但 config.audioTask 残留 'tts'，且请求未显式传 task。
@@ -3236,6 +3497,19 @@ describe('media-generation-engine · 分派与缓存', () => {
       clearMediaGenerationSessionHistory('s2')
     }
   })
+
+  test('清理短 sessionId 不会误删以其结尾的另一会话', () => {
+    try {
+      setLastGenerated('image', 'abc', '/x/abc.png')
+      setLastGenerated('image', 'nested:abc', '/x/nested.png')
+      clearMediaGenerationSessionHistory('abc')
+      expect(getLastGenerated('image', 'abc')).toBeUndefined()
+      expect(getLastGenerated('image', 'nested:abc')).toBe('/x/nested.png')
+    } finally {
+      clearMediaGenerationSessionHistory('abc')
+      clearMediaGenerationSessionHistory('nested:abc')
+    }
+  })
 })
 
 // ===== 参考文件越界校验（readReferenceFiles 安全防线） =====
@@ -3270,6 +3544,38 @@ describe('media-generation-engine · 参考文件路径安全', () => {
       expect(files[0]!.mediaType).toBe('image/png')
     } finally {
       rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('参考素材累计大小超过预算时跳过超限文件', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prism-ref-budget-'))
+    try {
+      const first = join(cwd, 'first.png')
+      const second = join(cwd, 'second.png')
+      writeFileSync(first, Buffer.alloc(6))
+      writeFileSync(second, Buffer.alloc(6))
+      const files = readReferenceFiles([first, second], cwd, [], 10)
+      expect(files.map((file) => file.filename)).toEqual(['first.png'])
+      const sharedBudget = { remainingBytes: 10 }
+      expect(readReferenceFiles([first], cwd, [], 10, sharedBudget)).toHaveLength(1)
+      expect(readReferenceFiles([second], cwd, [], 10, sharedBudget)).toHaveLength(0)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('显式额外输入根目录允许读取 cwd 外素材', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'prism-ref-root-cwd-'))
+    const assets = mkdtempSync(join(tmpdir(), 'prism-ref-root-assets-'))
+    try {
+      const refFile = join(assets, 'approved.png')
+      writeFileSync(refFile, Buffer.from('approved'))
+      const files = readReferenceFiles([refFile], cwd, [assets])
+      expect(files).toHaveLength(1)
+      expect(files[0]?.filename).toBe('approved.png')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+      rmSync(assets, { recursive: true, force: true })
     }
   })
 
@@ -3318,6 +3624,21 @@ describe('media-generation-engine · 参考文件路径安全', () => {
       expect(files).toHaveLength(0)
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('cwd 尚未创建时仍允许读取已存在的额外白名单素材', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prism-ref-missing-cwd-allowed-'))
+    const assets = mkdtempSync(join(tmpdir(), 'prism-ref-missing-cwd-assets-'))
+    try {
+      const refFile = join(assets, 'approved.png')
+      writeFileSync(refFile, Buffer.from('approved'))
+      const files = readReferenceFiles([refFile], join(dir, 'generated-media-not-created-yet'), [assets])
+      expect(files).toHaveLength(1)
+      expect(files[0]?.filename).toBe('approved.png')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(assets, { recursive: true, force: true })
     }
   })
 })

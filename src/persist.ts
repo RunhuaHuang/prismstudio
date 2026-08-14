@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { GeneratedImageData } from './engine/media-generation-engine.js'
 
@@ -43,7 +43,13 @@ export interface PersistedItem {
   /** MIME 类型 */
   mediaType: string
   /** base64 原始数据（用于 image/audio content 块） */
-  data: string
+  data?: string
+  /** 解码后的媒体字节数 */
+  byteLength: number
+  /** 是否已作为 MCP image/audio content 内联 */
+  inlined: boolean
+  /** 写入本地失败时，为避免丢失已生成结果而进行的异常内联回退。 */
+  recoveredInline?: boolean
 }
 
 // ===== 扩展名 / 前缀 =====
@@ -99,6 +105,8 @@ export function sanitizeFilename(raw: string): string {
 export interface PersistOptions {
   /** 输出根目录；通常为 outputDir/generated-media */
   outputDir: string
+  /** image/audio 内联回传上限；0 表示始终只返回路径，undefined 表示不限制 */
+  maxInlineBytes?: number
 }
 
 export interface PersistResult {
@@ -129,6 +137,9 @@ export function persistGenerated(
   const content: McpContent[] = []
   const savedPaths: string[] = []
   const textParts: string[] = []
+  let pathOnlyCount = 0
+  let recoveredInlineCount = 0
+  const unrecoverablePersistenceFailures: string[] = []
 
   // 确保输出目录存在
   try {
@@ -142,6 +153,7 @@ export function persistGenerated(
 
   for (let i = 0; i < generated.length; i++) {
     const item = generated[i]!
+    const byteLength = Buffer.byteLength(item.data, 'base64')
     const ext = extForMediaType(item.mediaType)
     const suffix = generated.length > 1 ? `-${i + 1}` : ''
     const requestedFilename = sanitizedCustom
@@ -150,27 +162,56 @@ export function persistGenerated(
 
     let filename = requestedFilename
     let localPath: string | undefined
+    let persistenceFailed = false
     try {
       const written = writeGeneratedFileExclusively(options.outputDir, requestedFilename, item.data)
       filename = written.filename
       localPath = written.fullPath
       savedPaths.push(written.fullPath)
     } catch (err) {
-      console.warn(`[prismstudio] 写入文件失败 (${filename})：`, err)
+      persistenceFailed = true
+      console.warn(`[prismstudio] 写入文件失败（请求文件名 ${requestedFilename}，输出目录 ${options.outputDir}）：`, err)
     }
 
-    items.push({ localPath, filename, mediaType: item.mediaType, data: item.data })
+    const isInlineMedia = item.mediaType.startsWith('image/') || item.mediaType.startsWith('audio/')
+    // 落盘失败时，图片/音频必须以内联形式返回，即使超过通常的内联上限。
+    // 上游调用可能已经产生费用；静默丢弃唯一一份结果比异常情况下的上下文体积更糟。
+    const recoveredInline = persistenceFailed && isInlineMedia
+    const inlined = isInlineMedia && (recoveredInline || options.maxInlineBytes === undefined || byteLength <= options.maxInlineBytes)
+    if (recoveredInline) recoveredInlineCount++
+    items.push({
+      localPath,
+      filename,
+      mediaType: item.mediaType,
+      // Avoid retaining a second large base64 string for path-only media.
+      data: inlined ? item.data : undefined,
+      byteLength,
+      inlined,
+      ...(recoveredInline ? { recoveredInline: true } : {}),
+    })
 
     // image / audio 放进 content 块直接回传给 LLM（体积可控）
-    if (item.mediaType.startsWith('image/')) {
+    if (inlined && item.mediaType.startsWith('image/')) {
       content.push({ type: 'image', data: item.data, mimeType: item.mediaType })
-    } else if (item.mediaType.startsWith('audio/')) {
+    } else if (inlined && item.mediaType.startsWith('audio/')) {
       content.push({ type: 'audio', data: item.data, mimeType: item.mediaType })
+    } else if (isInlineMedia && localPath) {
+      pathOnlyCount++
     }
+    if (persistenceFailed && !isInlineMedia) unrecoverablePersistenceFailures.push(filename)
     // video 不放进 content 块（体积过大），仅靠下方文本路径引用
 
     // 文本里记录本地路径（任意 agent 可读）
     textParts.push(localPath ? `- ${localPath}` : `- ${filename}（写入失败）`)
+  }
+
+  // MCP 没有标准 video content 块。若视频无法落盘，就不能把它伪装成成功且只给一个
+  // 不存在的路径；抛错至少能让调用方立即获知并重试到一个可写目录。
+  if (unrecoverablePersistenceFailures.length > 0) {
+    throw new Error(
+      `${modalityLabel}已由上游生成，但无法保存以下文件：${unrecoverablePersistenceFailures.join(', ')}。` +
+      '请检查输出目录权限、磁盘空间或改用可写目录后重试。',
+    )
   }
 
   const count = generated.length
@@ -178,7 +219,11 @@ export function persistGenerated(
   const pathInfo = savedPaths.length > 0
     ? `\n${modalityLabel}已保存到本地:\n${textParts.join('\n')}`
     : `\n${modalityLabel}生成完成，但未能保存到本地。`
-  const summary = count > 0 ? `${modalityLabel}已生成（${count} 个）${providerSuffix}${pathInfo}` : `未生成${modalityLabel}内容${providerSuffix}`
+  const inlineNote = pathOnlyCount > 0 ? `\n其中 ${pathOnlyCount} 个文件超过内联上限，仅返回本地路径。` : ''
+  const recoveryNote = recoveredInlineCount > 0
+    ? `\n其中 ${recoveredInlineCount} 个文件落盘失败，已紧急以内联数据返回，避免丢失生成结果。`
+    : ''
+  const summary = count > 0 ? `${modalityLabel}已生成（${count} 个）${providerSuffix}${pathInfo}${inlineNote}${recoveryNote}` : `未生成${modalityLabel}内容${providerSuffix}`
   content.push({ type: 'text', text: summary })
 
   return { items, content, savedPaths }
@@ -196,16 +241,40 @@ function writeGeneratedFileExclusively(
   const dot = requestedFilename.lastIndexOf('.')
   const stem = dot > 0 ? requestedFilename.slice(0, dot) : requestedFilename
   const ext = dot > 0 ? requestedFilename.slice(dot) : ''
-  const data = Buffer.from(base64Data, 'base64')
-
   for (let attempt = 1; attempt <= 10_000; attempt++) {
     const filename = attempt === 1 ? requestedFilename : `${stem}-${attempt}${ext}`
     const fullPath = resolve(outputDir, filename)
+    let fd: number | undefined
+    let createdByThisCall = false
     try {
-      writeFileSync(fullPath, data, { flag: 'wx' })
+      fd = openSync(fullPath, 'wx', 0o600)
+      createdByThisCall = true
+      // Decode bounded chunks so a large provider response does not create a
+      // second full-size Buffer during persistence.
+      const chunkChars = 1024 * 1024 * 4 // divisible by 4, preserves base64 groups
+      for (let offset = 0; offset < base64Data.length; offset += chunkChars) {
+        const chunk = Buffer.from(base64Data.slice(offset, offset + chunkChars), 'base64')
+        let written = 0
+        while (written < chunk.length) written += writeSync(fd, chunk, written, chunk.length - written)
+      }
+      closeSync(fd)
+      fd = undefined
+      if (process.platform !== 'win32') chmodSync(fullPath, 0o600)
       return { filename, fullPath }
     } catch (err) {
+      if (fd !== undefined) {
+        try { closeSync(fd) } catch { /* ignore cleanup failure */ }
+      }
+      // EEXIST means another file won the race; never remove that existing
+      // file or symlink while choosing the next collision-free name.
       if (isAlreadyExistsError(err)) continue
+      // Only remove a partial artifact that this invocation successfully
+      // created.  An open failure (for example EACCES/ENOTDIR) may refer to
+      // an existing user path; removing it would violate the no-overwrite
+      // guarantee and create a race with another writer.
+      if (createdByThisCall) {
+        try { rmSync(fullPath, { force: true }) } catch { /* ignore cleanup failure */ }
+      }
       throw err
     }
   }
